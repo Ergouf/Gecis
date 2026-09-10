@@ -1,7 +1,6 @@
 package com.ergouf.gecis
 
 import android.annotation.SuppressLint
-import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
@@ -9,7 +8,6 @@ import android.os.Bundle
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
-import android.widget.EditText
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.webkit.WebViewAssetLoader
@@ -27,14 +25,13 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private lateinit var tokenVault: OAuthTokenVault
     private var pendingAfterAuth: PendingMessage? = null
     private var inflight: PendingMessage? = null
-    private var codeDialog: AlertDialog? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         tokenVault = OAuthTokenVault(applicationContext)
         runtime = AntigravityRuntime(applicationContext, tokenVault)
-        oauth = AntigravityOAuthCoordinator(applicationContext, tokenVault)
+        oauth = AntigravityOAuthCoordinator(tokenVault)
 
         val assetLoader = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
@@ -60,7 +57,6 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     }
 
     override fun onDestroy() {
-        codeDialog?.dismiss()
         oauth.close()
         runtime.close()
         webView.removeJavascriptInterface("GecisNative")
@@ -84,7 +80,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private fun beginGoogleOAuth(message: PendingMessage) {
         if (pendingAfterAuth != null) return
         pendingAfterAuth = message
-        Toast.makeText(this, "首次使用需要登录 Google 账号", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "请使用 Google 账号登录", Toast.LENGTH_SHORT).show()
         oauth.start(this)
     }
 
@@ -98,41 +94,8 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         }
     }
 
-    override fun onAuthorizationCodeRequested() {
-        runOnUiThread {
-            if (codeDialog?.isShowing == true) return@runOnUiThread
-            val input = EditText(this).apply {
-                hint = "授权码"
-                setSingleLine(true)
-            }
-            codeDialog = AlertDialog.Builder(this)
-                .setTitle("完成 Google 登录")
-                .setMessage("在浏览器中选择 Google 账号并完成授权后，复制页面显示的一次性授权码并粘贴到这里。")
-                .setView(input)
-                .setNegativeButton("取消") { _, _ -> failPendingAuth("已取消 Google 登录") }
-                .setPositiveButton("继续", null)
-                .create()
-                .also { dialog ->
-                    dialog.setOnShowListener {
-                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                            val code = input.text?.toString()?.trim().orEmpty()
-                            if (code.isBlank()) {
-                                input.error = "请输入授权码"
-                                return@setOnClickListener
-                            }
-                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-                            oauth.submitAuthorizationCode(code)
-                        }
-                    }
-                    dialog.show()
-                }
-        }
-    }
-
     override fun onAuthenticated() {
         runOnUiThread {
-            codeDialog?.dismiss()
-            codeDialog = null
             val pending = pendingAfterAuth
             pendingAfterAuth = null
             Toast.makeText(this, "Google 账号已连接", Toast.LENGTH_SHORT).show()
@@ -161,8 +124,6 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
     private fun failPendingAuth(message: String) {
         oauth.cancel()
-        codeDialog?.dismiss()
-        codeDialog = null
         val pending = pendingAfterAuth
         pendingAfterAuth = null
         if (pending != null) onError(pending.requestId, message)

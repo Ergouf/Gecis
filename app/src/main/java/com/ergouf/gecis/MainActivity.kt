@@ -50,7 +50,8 @@ class MainActivity : ComponentActivity() {
         fun sendMessage(text: String): String {
             // TODO: replace with the local Antigravity runtime bridge.
             // Keep the WebView isolated from fenbi.db and runtime process details.
-            return "你问的是：$text\n\n当前原生桥已经接通。下一步把这里替换成本地 AI runtime 调用即可。\n\n公式示例：$$\\frac{a}{b}+\\sqrt{x^2+y^2}$$"
+            val block = "${'$'}${'$'}"
+            return "你问的是：$text\n\n当前原生桥已经接通。下一步把这里替换成本地 AI runtime 调用即可。\n\n公式示例：${block}\\frac{a}{b}+\\sqrt{x^2+y^2}${block}"
         }
     }
 }

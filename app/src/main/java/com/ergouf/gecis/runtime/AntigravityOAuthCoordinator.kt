@@ -26,12 +26,13 @@ class AntigravityOAuthCoordinator(private val context: Context) : AutoCloseable 
     }
 
     private val main = Handler(Looper.getMainLooper())
-    private val io = Executors.newSingleThreadExecutor()
+    private val io = Executors.newCachedThreadPool()
     private val lock = Any()
     private var process: Process? = null
     private var writer: BufferedWriter? = null
     private var listener: Listener? = null
     private val closed = AtomicBoolean(false)
+    private var cancelled = false
     private var selectedGoogleOAuth = false
     private var emittedUrl: String? = null
     private var askedForCode = false
@@ -43,6 +44,12 @@ class AntigravityOAuthCoordinator(private val context: Context) : AutoCloseable 
             check(!closed.get()) { "OAuth coordinator 已关闭" }
             if (process?.isAlive == true) return
             this.listener = listener
+            cancelled = false
+            selectedGoogleOAuth = false
+            emittedUrl = null
+            askedForCode = false
+            authenticated = false
+            transcript.setLength(0)
         }
 
         io.execute {
@@ -71,7 +78,7 @@ class AntigravityOAuthCoordinator(private val context: Context) : AutoCloseable 
 
                 BufferedReader(InputStreamReader(owner.inputStream, Charsets.UTF_8)).use { reader ->
                     val chunk = CharArray(1024)
-                    while (!closed.get()) {
+                    while (!closed.get() && !cancelled) {
                         val count = reader.read(chunk)
                         if (count < 0) break
                         if (count == 0) continue
@@ -80,11 +87,11 @@ class AntigravityOAuthCoordinator(private val context: Context) : AutoCloseable 
                     }
                 }
 
-                if (!authenticated && !closed.get()) {
+                if (!authenticated && !closed.get() && !cancelled) {
                     fail("Google OAuth 进程已退出。${tailTranscript()}")
                 }
             } catch (error: Throwable) {
-                if (!closed.get()) fail(error.message ?: "无法启动 Google OAuth")
+                if (!closed.get() && !cancelled) fail(error.message ?: "无法启动 Google OAuth")
             } finally {
                 synchronized(lock) {
                     writer = null
@@ -110,8 +117,22 @@ class AntigravityOAuthCoordinator(private val context: Context) : AutoCloseable 
                     out.flush()
                 }
             } catch (error: Throwable) {
-                fail(error.message ?: "无法提交授权码")
+                if (!cancelled) fail(error.message ?: "无法提交授权码")
             }
+        }
+    }
+
+    fun cancel() {
+        synchronized(lock) {
+            cancelled = true
+            listener = null
+            try {
+                writer?.close()
+            } catch (_: Throwable) {
+            }
+            process?.destroy()
+            writer = null
+            process = null
         }
     }
 
@@ -163,16 +184,7 @@ class AntigravityOAuthCoordinator(private val context: Context) : AutoCloseable 
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
-        synchronized(lock) {
-            try {
-                writer?.close()
-            } catch (_: Throwable) {
-            }
-            process?.destroy()
-            writer = null
-            process = null
-            listener = null
-        }
+        cancel()
         io.shutdownNow()
     }
 

@@ -32,16 +32,24 @@ Gecis uses **Antigravity's own Google OAuth session**. API-key authentication is
 The rules are:
 
 1. The WebView never receives OAuth credentials.
-2. If no cached Antigravity OAuth session exists, the native layer starts an Antigravity authentication process.
+2. If no encrypted Antigravity OAuth session exists, the native layer starts an Antigravity authentication process.
 3. Gecis opens the Google authorization URL in the system browser.
 4. The OAuth client, scopes, state/PKCE values and token exchange remain owned by Antigravity; Gecis does not substitute an unrelated Android Google Sign-In ID token.
-5. Headless chat reuses the resulting Antigravity session. If the session becomes invalid, the runtime emits an authentication-required event and the app restarts OAuth before retrying the pending message.
+5. The resulting Antigravity OAuth JSON is immediately moved into an Android Keystore-backed encrypted vault and transient plaintext token files are deleted.
+6. Headless chat decrypts the credential only when launching the child process and supplies it through `JETSKI_OAUTH_TOKEN`.
+7. If the session becomes invalid, the runtime clears the vault and restarts OAuth before retrying the pending chat turn.
 
-Android does not provide the Linux Secret Service used by the normal Linux keyring path. The first implementation therefore enables Antigravity's file-backed credential mode with `GEMINI_FORCE_FILE_STORAGE=true` and places its HOME under the app-private `noBackupFilesDir`. This keeps credentials private to the application and out of Android backup, while avoiding a bundled D-Bus/keyring stack.
+The pinned `agy.va39` v1.2.0 binary has been inspected by CI. It exposes these relevant markers:
 
-Current Antigravity builds have used more than one OAuth token filename (`antigravity-oauth-token` and `jetski-standalone-oauth-token`). Runtime compatibility must be verified against the pinned engine rather than assumed. The native probe fails closed if the pinned binary no longer exposes the expected file-storage OAuth contract.
+- `JETSKI_OAUTH_TOKEN`
+- `jetski-standalone-oauth-token`
+- `org.freedesktop.secrets`
 
-The initial Android integration uses Antigravity's remote-style browser handoff because it keeps OAuth protocol ownership inside Antigravity. A seamless loopback/deep-link handoff may replace the one-time code handoff only after it is verified against the pinned engine on Android.
+It does **not** expose `GEMINI_FORCE_FILE_STORAGE`. Gecis therefore must not depend on that older compatibility switch.
+
+During interactive login, Gecis watches the transient Antigravity token locations used by current/older builds, normalizes the OAuth payload to the `{token, auth_method}` wrapper accepted by `JETSKI_OAUTH_TOKEN`, encrypts it with Android Keystore, then deletes the plaintext source. No Linux D-Bus/Secret Service service is bundled into the app.
+
+The initial integration can use Antigravity's remote-style browser handoff if required by the pinned engine. A same-device loopback callback is preferred when verified because it removes manual code copying while still leaving OAuth protocol ownership inside Antigravity.
 
 ## Conversation protocol
 
@@ -68,6 +76,6 @@ The app consumes `step_update.step_update.text_delta` events for streaming UI up
 - WebView never receives a filesystem path for `fenbi.db`, the AI binary, or OAuth credentials.
 - WebView communicates only through the narrow `GecisNative` JavaScript bridge.
 - Antigravity runs with `--sandbox`; Gecis never adds `--dangerously-skip-permissions`.
-- OAuth state lives under app-private storage; it is not exposed as a web credential.
+- OAuth credentials are encrypted at rest with Android Keystore and are excluded from Android backup by living behind app-owned encrypted state/no-backup runtime storage.
 - The future `fenbi.db` adapter must open the database read-only and inject only retrieved text into a prompt/context layer.
 - Remote JavaScript must not coexist with the native bridge in production; Markdown/KaTeX assets must be bundled into the APK before release.

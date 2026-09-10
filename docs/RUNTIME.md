@@ -2,6 +2,12 @@
 
 Gecis is a **single Android application**. Users must not be required to install Termux or launch a user-visible localhost service.
 
+## Product boundary
+
+The visible product is one continuous chat interface. There are no practice flows, question-bank lists, wrong-answer lists, score pages, or settings-heavy study modules.
+
+`fenbi.db` is a local read-only knowledge source for the conversation. The database is never exposed as a user-facing question-bank UI.
+
 ## Upstream
 
 The current Android-compatible engine source is `wallentx/antigravity-cli-termux`. Its release contains two binaries:
@@ -65,6 +71,38 @@ Gecis handles this explicitly:
 
 This keeps Wi-Fi, cellular and VPN DNS behavior aligned with the Android device instead of hard-coding public resolvers or Termux paths.
 
+## Local renderer
+
+The WebView renderer is fully bundled at build time. `marked`, `DOMPurify`, KaTeX JavaScript/CSS and KaTeX fonts are staged into APK assets from pinned package versions before `assembleDebug`.
+
+The WebView blocks non-appasset subresources, so remote JavaScript cannot execute alongside the native JavaScript bridge. User links are opened externally.
+
+Assistant messages support Markdown plus inline/display TeX delimiters. Markdown output is sanitized before being inserted into the DOM, and KaTeX runs with `trust=false`.
+
+## fenbi.db knowledge adapter
+
+The user selects `fenbi.db` through Android's Storage Access Framework. Gecis copies the selected file into app-private `noBackupFilesDir`; the original document is never modified.
+
+Import validation requires:
+
+- the SQLite 3 file header;
+- successful read-only open;
+- `PRAGMA quick_check(1)` returning `ok`.
+
+The first implementation intentionally does not invent a fixed Powder/Fenbi schema. It inspects user tables/views, prioritizes likely question/material/analysis text columns, and performs bounded read-only `LIKE` retrieval over a small number of candidate tables and terms.
+
+Retrieved rows are converted to a bounded text context and wrapped inside `<fenbi_context>`. The prompt explicitly treats database contents as untrusted reference material rather than instructions, reducing prompt-injection risk from stored text.
+
+If generic schema probing cannot query a particular view or affinity, that source is skipped rather than breaking the chat turn. If no relevant local context is found, the original user message is sent unchanged.
+
+Visible onboarding stays chat-first:
+
+1. user sends the first message;
+2. if no local `fenbi.db` exists, Android opens the system document picker;
+3. after a valid database is imported, the original message continues automatically;
+4. if Google OAuth is also missing, OAuth runs next;
+5. after authentication, the original turn is sent with any retrieved local context.
+
 ## Conversation protocol
 
 After authentication, Gecis launches one persistent process using:
@@ -91,6 +129,7 @@ The app consumes `step_update.step_update.text_delta` events for streaming UI up
 - WebView communicates only through the narrow `GecisNative` JavaScript bridge.
 - OAuth loopback accepts connections only on the local device and validates a cryptographically random state plus PKCE verifier/challenge.
 - OAuth credentials are encrypted at rest with Android Keystore and Android backup is disabled for app data.
+- `fenbi.db` is copied into private storage, validated, opened read-only, and never modified by retrieval.
+- Database contents are treated as untrusted context, not executable instructions.
 - Antigravity runs with `--sandbox`; Gecis never adds `--dangerously-skip-permissions`.
-- The future `fenbi.db` adapter must open the database read-only and inject only retrieved text into a prompt/context layer.
-- Remote JavaScript must not coexist with the native bridge in production; Markdown/KaTeX assets must be bundled into the APK before release.
+- Renderer JavaScript is local-only and pinned at build time.

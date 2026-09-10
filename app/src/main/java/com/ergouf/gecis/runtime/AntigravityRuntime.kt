@@ -35,9 +35,14 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
                 synchronized(lock) {
                     check(!closed) { "AI runtime 已关闭" }
                     check(pending == null) { "上一条消息仍在生成中" }
-                    ensureProcessLocked()
                     pending = Pending(requestId, listener)
-                    localWriter = writer ?: error("AI runtime stdin 不可用")
+                    try {
+                        ensureProcessLocked()
+                        localWriter = writer ?: error("AI runtime stdin 不可用")
+                    } catch (error: Throwable) {
+                        pending = null
+                        throw error
+                    }
                 }
 
                 val input = JSONObject()
@@ -108,7 +113,7 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
                 value
             }
             active?.let {
-                deliverError(it.listener, it.requestId, "AI runtime 已退出，请重新登录或重试")
+                deliverError(it.listener, it.requestId, "AI runtime 已退出，请重试")
             }
         }
     }
@@ -116,10 +121,35 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
     private fun drainStderr(owner: Process) {
         try {
             BufferedReader(InputStreamReader(owner.errorStream, Charsets.UTF_8)).useLines { lines ->
-                lines.forEach { line -> Log.w(TAG, "agy: $line") }
+                lines.forEach { line ->
+                    Log.w(TAG, "agy: $line")
+                    if (isAuthenticationRequired(line)) {
+                        handleAuthenticationRequired(owner)
+                    }
+                }
             }
         } catch (error: Throwable) {
             if (owner.isAlive) Log.w(TAG, "Antigravity stderr reader failed", error)
+        }
+    }
+
+    private fun handleAuthenticationRequired(owner: Process) {
+        var active: Pending? = null
+        synchronized(lock) {
+            if (process === owner && pending != null) {
+                active = pending
+                pending = null
+                try {
+                    writer?.close()
+                } catch (_: Throwable) {
+                }
+                owner.destroy()
+                resetProcessLocked()
+            }
+        }
+        active?.let { value ->
+            AntigravityEnvironment.clearPersistedOAuthToken(context)
+            mainHandler.post { value.listener.onAuthenticationRequired(value.requestId) }
         }
     }
 
@@ -152,7 +182,10 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
                     value
                 } ?: return
 
-                if (errorText.isNotBlank() || status in TERMINAL_ERRORS) {
+                if (isAuthenticationRequired(errorText)) {
+                    AntigravityEnvironment.clearPersistedOAuthToken(context)
+                    mainHandler.post { active.listener.onAuthenticationRequired(active.requestId) }
+                } else if (errorText.isNotBlank() || status in TERMINAL_ERRORS) {
                     deliverError(
                         active.listener,
                         active.requestId,
@@ -193,6 +226,9 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
         mainHandler.post { listener.onError(requestId, message) }
     }
 
+    private fun isAuthenticationRequired(message: String): Boolean =
+        AUTH_ERRORS.any { message.contains(it, ignoreCase = true) }
+
     private data class Pending(
         val requestId: String,
         val listener: ChatRuntime.Listener,
@@ -202,6 +238,13 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
     companion object {
         private const val TAG = "GecisRuntime"
         private val TERMINAL_ERRORS = setOf("ERROR", "CANCELED", "INTERRUPTED", "INVALID")
+        private val AUTH_ERRORS = listOf(
+            "authentication required",
+            "unauthenticated",
+            "not logged in",
+            "please sign in",
+            "please run 'antigravity login'",
+        )
     }
 }
 
@@ -209,11 +252,12 @@ internal object AntigravityEnvironment {
     private const val HOME_DIR = "agy-home"
     private const val TOKEN_RELATIVE_PATH = ".gemini/antigravity-cli/antigravity-oauth-token"
 
+    fun home(context: Context): File = File(context.noBackupFilesDir, HOME_DIR)
+
     fun prepareHome(context: Context): File {
-        val home = File(context.noBackupFilesDir, HOME_DIR).apply { mkdirs() }
+        val home = home(context).apply { mkdirs() }
         val settingsDir = File(home, ".gemini/antigravity-cli").apply { mkdirs() }
         val settingsFile = File(settingsDir, "settings.json")
-
         val settings = try {
             if (settingsFile.isFile) JSONObject(settingsFile.readText()) else JSONObject()
         } catch (_: Throwable) {
@@ -221,13 +265,13 @@ internal object AntigravityEnvironment {
         }
         // Standard account OAuth must not inherit the Gemini API-key provider switch.
         settings.remove("modelProvider")
-        // SSH OAuth is easier to machine-drive in inline rendering mode.
+        // Remote OAuth is easier to machine-drive in inline rendering mode.
         settings.put("altScreenMode", "never")
         settingsFile.writeText(settings.toString())
         return home
     }
 
-    fun tokenFile(context: Context): File = File(prepareHome(context), TOKEN_RELATIVE_PATH)
+    fun tokenFile(context: Context): File = File(home(context), TOKEN_RELATIVE_PATH)
 
     fun hasPersistedOAuthToken(context: Context): Boolean {
         val file = tokenFile(context)
@@ -240,12 +284,16 @@ internal object AntigravityEnvironment {
         }
     }
 
+    fun clearPersistedOAuthToken(context: Context) {
+        tokenFile(context).delete()
+    }
+
     fun baseEnvironment(context: Context, home: File = prepareHome(context)): Map<String, String> = mapOf(
         "HOME" to home.absolutePath,
         "TMPDIR" to context.cacheDir.absolutePath,
         "GODEBUG" to "netdns=cgo",
-        // Antigravity's container/headless-compatible OAuth store avoids a Linux Secret Service
-        // dependency inside the Android APK. The token file stays inside noBackupFilesDir.
+        // Current Antigravity builds expose a file-backed token store for headless/container use.
+        // Keep it inside Android's app-private no-backup directory rather than requiring D-Bus.
         "GEMINI_FORCE_FILE_STORAGE" to "true",
     )
 }

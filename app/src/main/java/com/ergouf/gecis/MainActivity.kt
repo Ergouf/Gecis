@@ -25,6 +25,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private lateinit var runtime: ChatRuntime
     private lateinit var oauth: AntigravityOAuthCoordinator
     private var pendingAfterAuth: PendingMessage? = null
+    private var inflight: PendingMessage? = null
     private var codeDialog: AlertDialog? = null
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -68,17 +69,19 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     inner class GecisBridge {
         @JavascriptInterface
         fun sendMessage(requestId: String, text: String) {
+            val message = PendingMessage(requestId, text)
             if (AntigravityEnvironment.hasPersistedOAuthToken(applicationContext)) {
+                inflight = message
                 runtime.send(requestId, text, this@MainActivity)
             } else {
-                runOnUiThread { beginGoogleOAuth(requestId, text) }
+                runOnUiThread { beginGoogleOAuth(message) }
             }
         }
     }
 
-    private fun beginGoogleOAuth(requestId: String, text: String) {
+    private fun beginGoogleOAuth(message: PendingMessage) {
         if (pendingAfterAuth != null) return
-        pendingAfterAuth = PendingMessage(requestId, text)
+        pendingAfterAuth = message
         Toast.makeText(this, "首次使用需要登录 Google 账号", Toast.LENGTH_SHORT).show()
         oauth.start(this)
     }
@@ -104,9 +107,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                 .setTitle("完成 Google 登录")
                 .setMessage("在浏览器中完成 Google 授权后，复制页面显示的一次性授权码并粘贴到这里。")
                 .setView(input)
-                .setNegativeButton("取消") { _, _ ->
-                    failPendingAuth("已取消 Google 登录")
-                }
+                .setNegativeButton("取消") { _, _ -> failPendingAuth("已取消 Google 登录") }
                 .setPositiveButton("继续", null)
                 .create()
                 .also { dialog ->
@@ -134,7 +135,20 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             pendingAfterAuth = null
             Toast.makeText(this, "Google 账号已连接", Toast.LENGTH_SHORT).show()
             if (pending != null) {
+                inflight = pending
                 runtime.send(pending.requestId, pending.text, this@MainActivity)
+            }
+        }
+    }
+
+    override fun onAuthenticationRequired(requestId: String) {
+        runOnUiThread {
+            val message = inflight?.takeIf { it.requestId == requestId }
+            inflight = null
+            if (message != null) {
+                beginGoogleOAuth(message)
+            } else {
+                onError(requestId, "Google 登录已失效，请重新登录")
             }
         }
     }
@@ -144,6 +158,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     }
 
     private fun failPendingAuth(message: String) {
+        oauth.cancel()
         codeDialog?.dismiss()
         codeDialog = null
         val pending = pendingAfterAuth
@@ -156,10 +171,12 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     }
 
     override fun onComplete(requestId: String, text: String) {
+        if (inflight?.requestId == requestId) inflight = null
         emit("complete", requestId, text)
     }
 
     override fun onError(requestId: String, message: String) {
+        if (inflight?.requestId == requestId) inflight = null
         emit("error", requestId, message)
     }
 

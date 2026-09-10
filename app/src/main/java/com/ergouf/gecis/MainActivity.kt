@@ -7,6 +7,9 @@ import android.net.Uri
 import android.os.Bundle
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -17,6 +20,7 @@ import com.ergouf.gecis.runtime.AntigravityOAuthCoordinator
 import com.ergouf.gecis.runtime.AntigravityRuntime
 import com.ergouf.gecis.runtime.ChatRuntime
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 
 class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuthCoordinator.Listener {
     private lateinit var webView: WebView
@@ -39,18 +43,40 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
+            settings.domStorageEnabled = false
             settings.allowFileAccess = false
             settings.allowContentAccess = false
+            settings.allowFileAccessFromFileURLs = false
+            settings.allowUniversalAccessFromFileURLs = false
+            settings.javaScriptCanOpenWindowsAutomatically = false
+            settings.setSupportMultipleWindows(false)
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             webChromeClient = WebChromeClient()
             webViewClient = object : WebViewClientCompat() {
+                override fun shouldOverrideUrlLoading(
+                    view: WebView,
+                    request: WebResourceRequest,
+                ): Boolean {
+                    val url = request.url
+                    if (isBundledAsset(url)) return false
+                    if (request.isForMainFrame && (url.scheme == "https" || url.scheme == "http")) {
+                        openExternalUrl(url)
+                    }
+                    return true
+                }
+
                 override fun shouldInterceptRequest(
                     view: WebView,
-                    request: android.webkit.WebResourceRequest,
-                ) = assetLoader.shouldInterceptRequest(request.url)
+                    request: WebResourceRequest,
+                ): WebResourceResponse? {
+                    if (isBundledAsset(request.url)) {
+                        return assetLoader.shouldInterceptRequest(request.url)
+                    }
+                    return blockedResource()
+                }
             }
             addJavascriptInterface(GecisBridge(), "GecisNative")
-            loadUrl("https://appassets.androidplatform.net/assets/index.html")
+            loadUrl(APP_URL)
         }
 
         setContentView(webView)
@@ -155,5 +181,32 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         )
     }
 
+    private fun isBundledAsset(uri: Uri): Boolean =
+        uri.scheme == "https" &&
+            uri.host == APP_HOST &&
+            uri.path?.startsWith("/assets/") == true
+
+    private fun openExternalUrl(uri: Uri) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri))
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, "无法打开链接", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun blockedResource(): WebResourceResponse = WebResourceResponse(
+        "text/plain",
+        "utf-8",
+        403,
+        "Blocked",
+        emptyMap(),
+        ByteArrayInputStream(ByteArray(0)),
+    )
+
     private data class PendingMessage(val requestId: String, val text: String)
+
+    companion object {
+        private const val APP_HOST = "appassets.androidplatform.net"
+        private const val APP_URL = "https://$APP_HOST/assets/index.html"
+    }
 }

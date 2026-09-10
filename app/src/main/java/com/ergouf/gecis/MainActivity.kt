@@ -13,28 +13,70 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
 import com.ergouf.gecis.auth.OAuthTokenVault
+import com.ergouf.gecis.knowledge.FenbiKnowledgeBase
 import com.ergouf.gecis.runtime.AntigravityOAuthCoordinator
 import com.ergouf.gecis.runtime.AntigravityRuntime
 import com.ergouf.gecis.runtime.ChatRuntime
+import com.ergouf.gecis.runtime.KnowledgeAugmentingRuntime
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
+import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuthCoordinator.Listener {
     private lateinit var webView: WebView
     private lateinit var runtime: ChatRuntime
     private lateinit var oauth: AntigravityOAuthCoordinator
     private lateinit var tokenVault: OAuthTokenVault
+    private lateinit var knowledgeBase: FenbiKnowledgeBase
+    private val importWorker = Executors.newSingleThreadExecutor()
+
+    private var pendingAfterDatabase: PendingMessage? = null
     private var pendingAfterAuth: PendingMessage? = null
     private var inflight: PendingMessage? = null
+
+    private val openFenbiDatabase = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val pending = pendingAfterDatabase ?: return@registerForActivityResult
+        if (uri == null) {
+            pendingAfterDatabase = null
+            onError(pending.requestId, "未选择 fenbi.db")
+            return@registerForActivityResult
+        }
+
+        Toast.makeText(this, "正在导入 fenbi.db…", Toast.LENGTH_SHORT).show()
+        importWorker.execute {
+            try {
+                knowledgeBase.importFrom(uri)
+                runOnUiThread {
+                    if (pendingAfterDatabase?.requestId != pending.requestId) return@runOnUiThread
+                    pendingAfterDatabase = null
+                    val name = knowledgeBase.importedDisplayName(uri) ?: "fenbi.db"
+                    Toast.makeText(this, "$name 已就绪", Toast.LENGTH_SHORT).show()
+                    continueMessage(pending)
+                }
+            } catch (error: Throwable) {
+                runOnUiThread {
+                    if (pendingAfterDatabase?.requestId == pending.requestId) {
+                        pendingAfterDatabase = null
+                        onError(pending.requestId, error.message ?: "fenbi.db 导入失败")
+                    }
+                }
+            }
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         tokenVault = OAuthTokenVault(applicationContext)
-        runtime = AntigravityRuntime(applicationContext, tokenVault)
+        knowledgeBase = FenbiKnowledgeBase(applicationContext)
+        runtime = KnowledgeAugmentingRuntime(
+            AntigravityRuntime(applicationContext, tokenVault),
+            knowledgeBase,
+        )
         oauth = AntigravityOAuthCoordinator(tokenVault)
 
         val assetLoader = WebViewAssetLoader.Builder()
@@ -85,6 +127,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     override fun onDestroy() {
         oauth.close()
         runtime.close()
+        importWorker.shutdownNow()
         webView.removeJavascriptInterface("GecisNative")
         webView.destroy()
         super.onDestroy()
@@ -94,12 +137,29 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         @JavascriptInterface
         fun sendMessage(requestId: String, text: String) {
             val message = PendingMessage(requestId, text)
-            if (tokenVault.hasCredential()) {
-                inflight = message
-                runtime.send(requestId, text, this@MainActivity)
-            } else {
-                runOnUiThread { beginGoogleOAuth(message) }
-            }
+            runOnUiThread { handleSubmittedMessage(message) }
+        }
+    }
+
+    private fun handleSubmittedMessage(message: PendingMessage) {
+        if (pendingAfterDatabase != null || pendingAfterAuth != null || inflight != null) return
+
+        if (!knowledgeBase.hasDatabase()) {
+            pendingAfterDatabase = message
+            Toast.makeText(this, "首次使用请选择 fenbi.db", Toast.LENGTH_SHORT).show()
+            openFenbiDatabase.launch(arrayOf("*/*"))
+            return
+        }
+
+        continueMessage(message)
+    }
+
+    private fun continueMessage(message: PendingMessage) {
+        if (tokenVault.hasCredential()) {
+            inflight = message
+            runtime.send(message.requestId, message.text, this)
+        } else {
+            beginGoogleOAuth(message)
         }
     }
 
@@ -170,15 +230,17 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     }
 
     private fun emit(type: String, requestId: String, text: String) {
-        val payload = JSONObject()
-            .put("type", type)
-            .put("requestId", requestId)
-            .put("text", text)
-            .toString()
-        webView.evaluateJavascript(
-            "window.GecisChat && window.GecisChat.onNativeEvent($payload);",
-            null,
-        )
+        runOnUiThread {
+            val payload = JSONObject()
+                .put("type", type)
+                .put("requestId", requestId)
+                .put("text", text)
+                .toString()
+            webView.evaluateJavascript(
+                "window.GecisChat && window.GecisChat.onNativeEvent($payload);",
+                null,
+            )
+        }
     }
 
     private fun isBundledAsset(uri: Uri): Boolean =

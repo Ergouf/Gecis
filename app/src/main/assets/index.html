@@ -4,25 +4,32 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>Gecis</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <link rel="stylesheet" href="vendor/katex/katex.min.css" />
   <style>
     :root{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#171717;background:#f7f7f5}
-    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:#f7f7f5}
+    *{box-sizing:border-box}html{background:#f7f7f5}body{margin:0;min-height:100vh;background:#f7f7f5}
     .app{min-height:100vh;display:flex;flex-direction:column}
     header{height:58px;display:flex;align-items:center;padding:0 18px;border-bottom:1px solid #e8e8e4;background:rgba(247,247,245,.95);position:sticky;top:0;z-index:2}
     .brand{font-size:18px;font-weight:650;letter-spacing:-.02em}.status{margin-left:auto;font-size:12px;color:#777}
     main{flex:1;width:min(760px,100%);margin:0 auto;padding:26px 18px 130px}
     .message{margin:0 0 26px;line-height:1.72;font-size:16px}.user{display:flex;justify-content:flex-end}
-    .user .bubble{max-width:82%;background:#e9e9e5;border-radius:20px 20px 5px 20px;padding:11px 15px;white-space:pre-wrap}
-    .assistant .bubble{max-width:100%;white-space:pre-wrap}.assistant .katex-display{overflow-x:auto;overflow-y:hidden;padding:8px 0}
-    .assistant.pending .bubble::after{content:"";display:inline-block;width:6px;height:1em;margin-left:4px;background:#777;vertical-align:-2px;animation:blink 1s steps(1) infinite}
+    .user .bubble{max-width:82%;background:#e9e9e5;border-radius:20px 20px 5px 20px;padding:11px 15px;white-space:pre-wrap;overflow-wrap:anywhere}
+    .assistant .bubble{max-width:100%;overflow-wrap:anywhere}.assistant .bubble>:first-child{margin-top:0}.assistant .bubble>:last-child{margin-bottom:0}
+    .assistant p{margin:.4em 0 1em}.assistant h1,.assistant h2,.assistant h3{line-height:1.3;letter-spacing:-.025em;margin:1.25em 0 .55em}.assistant h1{font-size:1.55em}.assistant h2{font-size:1.3em}.assistant h3{font-size:1.12em}
+    .assistant ul,.assistant ol{padding-left:1.4em;margin:.55em 0 1em}.assistant li{margin:.2em 0}.assistant li>p{margin:.2em 0}
+    .assistant blockquote{margin:.75em 0 1em;padding:.1em 0 .1em 14px;border-left:3px solid #d2d2cc;color:#626262}.assistant blockquote p{margin:.25em 0}
+    .assistant code{font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:.88em;background:#ecece8;border-radius:6px;padding:.13em .34em}
+    .assistant pre{margin:.8em 0 1.1em;padding:13px 14px;border:1px solid #e0e0db;border-radius:12px;background:#efefeb;overflow:auto;line-height:1.55}.assistant pre code{background:transparent;padding:0;border-radius:0;white-space:pre;overflow-wrap:normal}
+    .assistant table{width:100%;border-collapse:collapse;margin:.9em 0 1.1em;display:block;overflow-x:auto}.assistant th,.assistant td{border-bottom:1px solid #deded9;padding:8px 12px;text-align:left;white-space:nowrap}.assistant th{font-weight:650}
+    .assistant a{color:#2d5c96;text-decoration-thickness:1px;text-underline-offset:2px}.assistant hr{border:0;border-top:1px solid #deded9;margin:1.4em 0}
+    .assistant .katex-display{overflow-x:auto;overflow-y:hidden;padding:8px 0}.assistant .katex{font-size:1.04em}
+    .assistant.pending .bubble:empty::after{content:"";display:inline-block;width:6px;height:1em;background:#777;vertical-align:-2px;animation:blink 1s steps(1) infinite}
+    .assistant.pending .bubble:not(:empty)::after{content:"";display:inline-block;width:6px;height:1em;margin-left:4px;background:#777;vertical-align:-2px;animation:blink 1s steps(1) infinite}
     @keyframes blink{50%{opacity:0}}
     .composer-wrap{position:fixed;left:0;right:0;bottom:0;padding:12px 14px calc(12px + env(safe-area-inset-bottom));background:linear-gradient(transparent,#f7f7f5 24%,#f7f7f5)}
     .composer{width:min(760px,100%);margin:0 auto;background:white;border:1px solid #deded9;border-radius:24px;padding:9px 10px 9px 16px;display:flex;align-items:flex-end;gap:8px;box-shadow:0 8px 30px rgba(0,0,0,.07)}
     textarea{flex:1;resize:none;border:0;outline:0;font:inherit;line-height:1.45;max-height:160px;min-height:28px;padding:5px 0;background:transparent;color:#171717}
-    button{width:38px;height:38px;border:0;border-radius:50%;background:#171717;color:white;font-size:20px;display:grid;place-items:center}button:disabled{opacity:.3}
+    button{width:38px;height:38px;flex:0 0 38px;border:0;border-radius:50%;background:#171717;color:white;font-size:20px;display:grid;place-items:center}button:disabled{opacity:.3}
     .empty{padding-top:18vh;text-align:center}.empty h1{font-size:30px;margin:0 0 10px;letter-spacing:-.04em}.empty p{color:#777;margin:0}
   </style>
 </head>
@@ -32,6 +39,10 @@
   <main id="messages"><section id="empty" class="empty"><h1>想学什么？</h1><p>直接提问。支持 Markdown 与数学公式。</p></section></main>
   <div class="composer-wrap"><form id="form" class="composer"><textarea id="input" rows="1" placeholder="问一道题、一个概念，或让它解释公式…"></textarea><button id="send" type="submit" aria-label="发送">↑</button></form></div>
 </div>
+<script src="vendor/dompurify/purify.min.js"></script>
+<script src="vendor/marked/marked.umd.js"></script>
+<script src="vendor/katex/katex.min.js"></script>
+<script src="vendor/katex/auto-render.min.js"></script>
 <script>
 const messages=document.getElementById('messages');
 const empty=document.getElementById('empty');
@@ -40,51 +51,143 @@ const input=document.getElementById('input');
 const send=document.getElementById('send');
 const status=document.getElementById('status');
 let active=null;
-function escapeHtml(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+function escapeHtml(value){
+  return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function protectMath(source){
+  const expressions=[];
+  const tokenPrefix='GECISMATHTOKEN';
+  const tokenSuffix='ENDTOKEN';
+  const pattern=/\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$[^$\n]+?\$/g;
+  const text=source.replace(pattern,match=>{
+    const index=expressions.push(match)-1;
+    return `${tokenPrefix}${index}${tokenSuffix}`;
+  });
+  return {text,expressions,tokenPrefix,tokenSuffix};
+}
+
+function restoreMath(html,protectedMath){
+  const pattern=new RegExp(`${protectedMath.tokenPrefix}(\\d+)${protectedMath.tokenSuffix}`,'g');
+  return html.replace(pattern,(_,index)=>escapeHtml(protectedMath.expressions[Number(index)]||''));
+}
+
 function renderMath(node){
   if(!window.renderMathInElement)return;
-  renderMathInElement(node,{delimiters:[
-    {left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},
-    {left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false}
-  ],throwOnError:false});
+  renderMathInElement(node,{
+    delimiters:[
+      {left:'$$',right:'$$',display:true},
+      {left:'\\[',right:'\\]',display:true},
+      {left:'$',right:'$',display:false},
+      {left:'\\(',right:'\\)',display:false}
+    ],
+    ignoredTags:['script','noscript','style','textarea','pre','code','option'],
+    throwOnError:false,
+    trust:false,
+    strict:'warn'
+  });
 }
-function renderText(node,text){node.innerHTML=escapeHtml(text).replace(/\n/g,'<br>');renderMath(node);}
+
+function renderAssistant(node,text){
+  if(!window.marked||!window.DOMPurify){
+    node.textContent=text;
+    return;
+  }
+  const math=protectMath(text);
+  const dirty=window.marked.parse(math.text,{gfm:true,breaks:true});
+  const clean=window.DOMPurify.sanitize(dirty,{
+    USE_PROFILES:{html:true},
+    FORBID_TAGS:['img','iframe','object','embed','style','form','input','button','video','audio']
+  });
+  node.innerHTML=restoreMath(clean,math);
+  renderMath(node);
+}
+
+function renderUser(node,text){node.textContent=text;}
+
+function renderMessage(node,role,text){
+  if(role==='assistant')renderAssistant(node,text);else renderUser(node,text);
+}
+
 function addMessage(role,text,requestId){
   empty?.remove();
-  const row=document.createElement('section');row.className=`message ${role}`;if(requestId)row.dataset.requestId=requestId;
-  const bubble=document.createElement('div');bubble.className='bubble';renderText(bubble,text);
-  row.appendChild(bubble);messages.appendChild(row);window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});return row;
+  const row=document.createElement('section');
+  row.className=`message ${role}`;
+  if(requestId)row.dataset.requestId=requestId;
+  const bubble=document.createElement('div');
+  bubble.className='bubble';
+  renderMessage(bubble,role,text);
+  row.appendChild(bubble);
+  messages.appendChild(row);
+  window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});
+  return row;
 }
+
 function beginAssistant(requestId){
-  const row=addMessage('assistant','',requestId);row.classList.add('pending');
-  active={requestId,row,bubble:row.querySelector('.bubble'),text:''};return active;
+  const row=addMessage('assistant','',requestId);
+  row.classList.add('pending');
+  active={requestId,row,bubble:row.querySelector('.bubble'),text:''};
+  return active;
 }
-function finish(){send.disabled=false;status.textContent='本地学习助手';input.focus();}
+
+function finish(){
+  send.disabled=false;
+  status.textContent='本地学习助手';
+  input.focus();
+}
+
 window.GecisChat={
   onNativeEvent(event){
     if(!active||event.requestId!==active.requestId)return;
     if(event.type==='delta'){
-      active.text+=event.text;renderText(active.bubble,active.text);window.scrollTo({top:document.body.scrollHeight});return;
+      active.text+=event.text;
+      renderAssistant(active.bubble,active.text);
+      window.scrollTo({top:document.body.scrollHeight});
+      return;
     }
     active.row.classList.remove('pending');
     if(event.type==='complete'){
-      active.text=event.text||active.text;renderText(active.bubble,active.text);
+      active.text=event.text||active.text;
+      renderAssistant(active.bubble,active.text);
     }else if(event.type==='error'){
-      active.text='发生错误：'+event.text;renderText(active.bubble,active.text);
+      active.text='发生错误：'+event.text;
+      renderAssistant(active.bubble,active.text);
     }
-    active=null;finish();
+    active=null;
+    finish();
   }
 };
+
 form.addEventListener('submit',e=>{
-  e.preventDefault();const text=input.value.trim();if(!text||active)return;
+  e.preventDefault();
+  const text=input.value.trim();
+  if(!text||active)return;
   const requestId=(crypto.randomUUID?.()||`${Date.now()}-${Math.random()}`);
-  addMessage('user',text);input.value='';input.style.height='auto';send.disabled=true;status.textContent='正在思考…';beginAssistant(requestId);
+  addMessage('user',text);
+  input.value='';
+  input.style.height='auto';
+  send.disabled=true;
+  status.textContent='正在思考…';
+  beginAssistant(requestId);
   try{
     if(!window.GecisNative?.sendMessage)throw new Error('原生 AI 桥尚未连接');
     window.GecisNative.sendMessage(requestId,text);
-  }catch(err){window.GecisChat.onNativeEvent({type:'error',requestId,text:err.message});}
+  }catch(err){
+    window.GecisChat.onNativeEvent({type:'error',requestId,text:err.message});
+  }
 });
-input.addEventListener('input',()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,160)+'px';});
+
+input.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){
+    e.preventDefault();
+    form.requestSubmit();
+  }
+});
+input.addEventListener('input',()=>{
+  input.style.height='auto';
+  input.style.height=Math.min(input.scrollHeight,160)+'px';
+});
 </script>
 </body>
 </html>

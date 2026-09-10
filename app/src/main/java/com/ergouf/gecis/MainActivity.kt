@@ -2,30 +2,36 @@ package com.ergouf.gecis
 
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
-import android.text.InputType
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.widget.EditText
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
-import com.ergouf.gecis.auth.ApiKeyStore
+import com.ergouf.gecis.runtime.AntigravityEnvironment
+import com.ergouf.gecis.runtime.AntigravityOAuthCoordinator
 import com.ergouf.gecis.runtime.AntigravityRuntime
 import com.ergouf.gecis.runtime.ChatRuntime
 import org.json.JSONObject
 
-class MainActivity : ComponentActivity(), ChatRuntime.Listener {
+class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuthCoordinator.Listener {
     private lateinit var webView: WebView
     private lateinit var runtime: ChatRuntime
-    private lateinit var apiKeyStore: ApiKeyStore
+    private lateinit var oauth: AntigravityOAuthCoordinator
+    private var pendingAfterAuth: PendingMessage? = null
+    private var codeDialog: AlertDialog? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        apiKeyStore = ApiKeyStore(applicationContext)
-        runtime = AntigravityRuntime(applicationContext, apiKeyStore)
+        runtime = AntigravityRuntime(applicationContext)
+        oauth = AntigravityOAuthCoordinator(applicationContext)
 
         val assetLoader = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
@@ -51,6 +57,8 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener {
     }
 
     override fun onDestroy() {
+        codeDialog?.dismiss()
+        oauth.close()
         runtime.close()
         webView.removeJavascriptInterface("GecisNative")
         webView.destroy()
@@ -60,48 +68,87 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener {
     inner class GecisBridge {
         @JavascriptInterface
         fun sendMessage(requestId: String, text: String) {
-            if (apiKeyStore.hasKey()) {
+            if (AntigravityEnvironment.hasPersistedOAuthToken(applicationContext)) {
                 runtime.send(requestId, text, this@MainActivity)
-                return
+            } else {
+                runOnUiThread { beginGoogleOAuth(requestId, text) }
             }
-            runOnUiThread { promptForApiKey(requestId, text) }
         }
     }
 
-    private fun promptForApiKey(requestId: String, pendingText: String) {
-        val input = EditText(this).apply {
-            hint = "Gemini API Key"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setSingleLine(true)
-        }
+    private fun beginGoogleOAuth(requestId: String, text: String) {
+        if (pendingAfterAuth != null) return
+        pendingAfterAuth = PendingMessage(requestId, text)
+        Toast.makeText(this, "首次使用需要登录 Google 账号", Toast.LENGTH_SHORT).show()
+        oauth.start(this)
+    }
 
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("连接 Gemini")
-            .setMessage("首次使用需要 Gemini API Key。密钥只会加密保存在 Android Keystore 中，不会传给网页界面。")
-            .setView(input)
-            .setNegativeButton("取消") { _, _ ->
-                onError(requestId, "未设置 Gemini API Key")
-            }
-            .setPositiveButton("保存并继续", null)
-            .create()
-
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val key = input.text?.toString()?.trim().orEmpty()
-                if (key.isBlank()) {
-                    input.error = "请输入 API Key"
-                    return@setOnClickListener
-                }
-                try {
-                    apiKeyStore.save(key)
-                    dialog.dismiss()
-                    runtime.send(requestId, pendingText, this@MainActivity)
-                } catch (error: Throwable) {
-                    input.error = error.message ?: "保存失败"
-                }
+    override fun onAuthorizationUrl(url: String) {
+        runOnUiThread {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            } catch (_: ActivityNotFoundException) {
+                failPendingAuth("设备上没有可打开 Google 登录页面的浏览器")
             }
         }
-        dialog.show()
+    }
+
+    override fun onAuthorizationCodeRequested() {
+        runOnUiThread {
+            if (codeDialog?.isShowing == true) return@runOnUiThread
+            val input = EditText(this).apply {
+                hint = "授权码"
+                setSingleLine(true)
+            }
+            codeDialog = AlertDialog.Builder(this)
+                .setTitle("完成 Google 登录")
+                .setMessage("在浏览器中完成 Google 授权后，复制页面显示的一次性授权码并粘贴到这里。")
+                .setView(input)
+                .setNegativeButton("取消") { _, _ ->
+                    failPendingAuth("已取消 Google 登录")
+                }
+                .setPositiveButton("继续", null)
+                .create()
+                .also { dialog ->
+                    dialog.setOnShowListener {
+                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                            val code = input.text?.toString()?.trim().orEmpty()
+                            if (code.isBlank()) {
+                                input.error = "请输入授权码"
+                                return@setOnClickListener
+                            }
+                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
+                            oauth.submitAuthorizationCode(code)
+                        }
+                    }
+                    dialog.show()
+                }
+        }
+    }
+
+    override fun onAuthenticated() {
+        runOnUiThread {
+            codeDialog?.dismiss()
+            codeDialog = null
+            val pending = pendingAfterAuth
+            pendingAfterAuth = null
+            Toast.makeText(this, "Google 账号已连接", Toast.LENGTH_SHORT).show()
+            if (pending != null) {
+                runtime.send(pending.requestId, pending.text, this@MainActivity)
+            }
+        }
+    }
+
+    override fun onError(message: String) {
+        runOnUiThread { failPendingAuth(message) }
+    }
+
+    private fun failPendingAuth(message: String) {
+        codeDialog?.dismiss()
+        codeDialog = null
+        val pending = pendingAfterAuth
+        pendingAfterAuth = null
+        if (pending != null) onError(pending.requestId, message)
     }
 
     override fun onDelta(requestId: String, text: String) {
@@ -127,4 +174,6 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener {
             null,
         )
     }
+
+    private data class PendingMessage(val requestId: String, val text: String)
 }

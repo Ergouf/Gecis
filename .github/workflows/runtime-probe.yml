@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'native/**'
+      - 'web/**'
       - 'app/**'
       - 'build.gradle.kts'
       - 'settings.gradle.kts'
@@ -27,6 +28,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -37,6 +43,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils dpkg-dev patchelf
 
+      - name: Stage local WebView renderer
+        run: bash web/stage-assets.sh
+
       - name: Probe pinned runtime
         run: bash native/probe-runtime.sh
 
@@ -46,12 +55,13 @@ jobs:
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
 
-      - name: Upload runtime report
+      - name: Upload build manifests
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: runtime-probe
+          name: build-manifests
           path: |
+            web/.stage/web-assets-manifest.json
             native/.probe/runtime-probe.json
             native/.probe/oauth-markers.txt
             native/.probe/staged-runtime-manifest.json
@@ -59,6 +69,7 @@ jobs:
             native/.probe/found-libs.txt
             native/.probe/missing-libs.txt
             native/.probe/unresolved-staged-needed.txt
+            native/.probe/resolver-patch.txt
           if-no-files-found: warn
 
       - name: Upload debug APK

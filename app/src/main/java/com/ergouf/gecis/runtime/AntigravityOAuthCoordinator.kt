@@ -6,7 +6,6 @@ import android.os.Looper
 import com.ergouf.gecis.auth.OAuthTokenVault
 import org.json.JSONObject
 import java.io.BufferedReader
-import java.io.OutputStreamWriter
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -43,11 +42,13 @@ class AntigravityOAuthCoordinator(
     private var serverSocket: ServerSocket? = null
     private var closed = false
     private var cancelled = false
+    private var active = false
 
     fun start(listener: Listener) {
         synchronized(lock) {
             check(!closed) { "OAuth coordinator 已关闭" }
-            if (serverSocket != null) return
+            if (active) return
+            active = true
             this.listener = listener
             cancelled = false
         }
@@ -62,7 +63,7 @@ class AntigravityOAuthCoordinator(
                         .digest(verifier.toByteArray(Charsets.US_ASCII)),
                 )
 
-                server = ServerSocket().apply {
+                val boundServer = ServerSocket().apply {
                     reuseAddress = true
                     bind(
                         InetSocketAddress(InetAddress.getByName("127.0.0.1"), CALLBACK_PORT),
@@ -70,18 +71,19 @@ class AntigravityOAuthCoordinator(
                     )
                     soTimeout = CALLBACK_TIMEOUT_MS
                 }
+                server = boundServer
                 synchronized(lock) {
                     if (cancelled || closed) {
-                        server.close()
+                        boundServer.close()
                         return@execute
                     }
-                    serverSocket = server
+                    serverSocket = boundServer
                 }
 
                 val authorizationUrl = buildAuthorizationUrl(state, challenge)
                 main.post { this.listener?.onAuthorizationUrl(authorizationUrl) }
 
-                val code = waitForAuthorizationCode(server, state)
+                val code = waitForAuthorizationCode(boundServer, state)
                 if (cancelled || closed) return@execute
 
                 val credential = exchangeCode(code, verifier)
@@ -103,6 +105,7 @@ class AntigravityOAuthCoordinator(
                     } catch (_: Throwable) {
                     }
                     if (serverSocket === server) serverSocket = null
+                    active = false
                 }
             }
         }
@@ -117,6 +120,7 @@ class AntigravityOAuthCoordinator(
             } catch (_: Throwable) {
             }
             serverSocket = null
+            active = false
         }
     }
 
@@ -184,24 +188,31 @@ class AntigravityOAuthCoordinator(
     }
 
     private fun respond(socket: Socket, status: Int, body: String) {
-        val bytes = body.toByteArray(Charsets.UTF_8)
+        val bodyBytes = body.toByteArray(Charsets.UTF_8)
         val reason = if (status == 404) "Not Found" else "Bad Request"
-        OutputStreamWriter(socket.getOutputStream(), Charsets.US_ASCII).use { out ->
-            out.write("HTTP/1.1 $status $reason\r\n")
-            out.write("Content-Type: text/plain; charset=utf-8\r\n")
-            out.write("Content-Length: ${bytes.size}\r\n")
-            out.write("Connection: close\r\n\r\n")
-            out.flush()
+        val headers = buildString {
+            append("HTTP/1.1 $status $reason\r\n")
+            append("Content-Type: text/plain; charset=utf-8\r\n")
+            append("Content-Length: ${bodyBytes.size}\r\n")
+            append("Connection: close\r\n\r\n")
+        }.toByteArray(Charsets.US_ASCII)
+        socket.getOutputStream().use { output ->
+            output.write(headers)
+            output.write(bodyBytes)
+            output.flush()
         }
     }
 
     private fun redirectToSuccess(socket: Socket) {
-        OutputStreamWriter(socket.getOutputStream(), Charsets.US_ASCII).use { out ->
-            out.write("HTTP/1.1 302 Found\r\n")
-            out.write("Location: https://antigravity.google/auth-success\r\n")
-            out.write("Content-Length: 0\r\n")
-            out.write("Connection: close\r\n\r\n")
-            out.flush()
+        val response = buildString {
+            append("HTTP/1.1 302 Found\r\n")
+            append("Location: https://antigravity.google/auth-success\r\n")
+            append("Content-Length: 0\r\n")
+            append("Connection: close\r\n\r\n")
+        }.toByteArray(Charsets.US_ASCII)
+        socket.getOutputStream().use { output ->
+            output.write(response)
+            output.flush()
         }
     }
 

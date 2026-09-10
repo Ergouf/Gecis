@@ -14,7 +14,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
-import com.ergouf.gecis.runtime.AntigravityEnvironment
+import com.ergouf.gecis.auth.OAuthTokenVault
 import com.ergouf.gecis.runtime.AntigravityOAuthCoordinator
 import com.ergouf.gecis.runtime.AntigravityRuntime
 import com.ergouf.gecis.runtime.ChatRuntime
@@ -24,6 +24,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private lateinit var webView: WebView
     private lateinit var runtime: ChatRuntime
     private lateinit var oauth: AntigravityOAuthCoordinator
+    private lateinit var tokenVault: OAuthTokenVault
     private var pendingAfterAuth: PendingMessage? = null
     private var inflight: PendingMessage? = null
     private var codeDialog: AlertDialog? = null
@@ -31,8 +32,9 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        runtime = AntigravityRuntime(applicationContext)
-        oauth = AntigravityOAuthCoordinator(applicationContext)
+        tokenVault = OAuthTokenVault(applicationContext)
+        runtime = AntigravityRuntime(applicationContext, tokenVault)
+        oauth = AntigravityOAuthCoordinator(applicationContext, tokenVault)
 
         val assetLoader = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
@@ -70,7 +72,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         @JavascriptInterface
         fun sendMessage(requestId: String, text: String) {
             val message = PendingMessage(requestId, text)
-            if (AntigravityEnvironment.hasPersistedOAuthToken(applicationContext)) {
+            if (tokenVault.hasCredential()) {
                 inflight = message
                 runtime.send(requestId, text, this@MainActivity)
             } else {
@@ -105,7 +107,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             }
             codeDialog = AlertDialog.Builder(this)
                 .setTitle("完成 Google 登录")
-                .setMessage("在浏览器中完成 Google 授权后，复制页面显示的一次性授权码并粘贴到这里。")
+                .setMessage("在浏览器中选择 Google 账号并完成授权后，复制页面显示的一次性授权码并粘贴到这里。")
                 .setView(input)
                 .setNegativeButton("取消") { _, _ -> failPendingAuth("已取消 Google 登录") }
                 .setPositiveButton("继续", null)

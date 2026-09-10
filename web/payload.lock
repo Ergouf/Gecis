@@ -1,0 +1,6 @@
+# Gecis WebView renderer dependency lock.
+# These exact npm package versions are staged into the APK at build time.
+
+KATEX_VERSION=0.18.7
+MARKED_VERSION=18.0.11
+DOMPURIFY_VERSION=3.4.15

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Gecis</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <style>
+    :root{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#171717;background:#f7f7f5}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:#f7f7f5}
+    .app{min-height:100vh;display:flex;flex-direction:column}
+    header{height:58px;display:flex;align-items:center;padding:0 18px;border-bottom:1px solid #e8e8e4;background:rgba(247,247,245,.95);position:sticky;top:0;z-index:2}
+    .brand{font-size:18px;font-weight:650;letter-spacing:-.02em}.status{margin-left:auto;font-size:12px;color:#777}
+    main{flex:1;width:min(760px,100%);margin:0 auto;padding:26px 18px 130px}
+    .message{margin:0 0 26px;line-height:1.72;font-size:16px}.user{display:flex;justify-content:flex-end}
+    .user .bubble{max-width:82%;background:#e9e9e5;border-radius:20px 20px 5px 20px;padding:11px 15px;white-space:pre-wrap}
+    .assistant .bubble{max-width:100%;white-space:pre-wrap}.assistant .katex-display{overflow-x:auto;overflow-y:hidden;padding:8px 0}
+    .composer-wrap{position:fixed;left:0;right:0;bottom:0;padding:12px 14px calc(12px + env(safe-area-inset-bottom));background:linear-gradient(transparent,#f7f7f5 24%,#f7f7f5)}
+    .composer{width:min(760px,100%);margin:0 auto;background:white;border:1px solid #deded9;border-radius:24px;padding:9px 10px 9px 16px;display:flex;align-items:flex-end;gap:8px;box-shadow:0 8px 30px rgba(0,0,0,.07)}
+    textarea{flex:1;resize:none;border:0;outline:0;font:inherit;line-height:1.45;max-height:160px;min-height:28px;padding:5px 0;background:transparent;color:#171717}
+    button{width:38px;height:38px;border:0;border-radius:50%;background:#171717;color:white;font-size:20px;display:grid;place-items:center}button:disabled{opacity:.3}
+    .empty{padding-top:18vh;text-align:center}.empty h1{font-size:30px;margin:0 0 10px;letter-spacing:-.04em}.empty p{color:#777;margin:0}
+  </style>
+</head>
+<body>
+<div class="app">
+  <header><div class="brand">Gecis</div><div class="status">本地学习助手</div></header>
+  <main id="messages"><section id="empty" class="empty"><h1>想学什么？</h1><p>直接提问。支持 Markdown 与数学公式。</p></section></main>
+  <div class="composer-wrap"><form id="form" class="composer"><textarea id="input" rows="1" placeholder="问一道题、一个概念，或让它解释公式…"></textarea><button id="send" type="submit" aria-label="发送">↑</button></form></div>
+</div>
+<script>
+const messages=document.getElementById('messages');
+const empty=document.getElementById('empty');
+const form=document.getElementById('form');
+const input=document.getElementById('input');
+const send=document.getElementById('send');
+function escapeHtml(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function renderMath(node){
+  if(!window.renderMathInElement)return;
+  renderMathInElement(node,{delimiters:[
+    {left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},
+    {left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false}
+  ],throwOnError:false});
+}
+function addMessage(role,text){
+  empty?.remove();
+  const row=document.createElement('section');row.className=`message ${role}`;
+  const bubble=document.createElement('div');bubble.className='bubble';bubble.innerHTML=escapeHtml(text).replace(/\n/g,'<br>');
+  row.appendChild(bubble);messages.appendChild(row);renderMath(bubble);window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});
+}
+async function ask(text){
+  if(window.GecisNative?.sendMessage)return window.GecisNative.sendMessage(text);
+  return '原生 AI 桥尚未连接。';
+}
+form.addEventListener('submit',async e=>{
+  e.preventDefault();const text=input.value.trim();if(!text)return;
+  addMessage('user',text);input.value='';send.disabled=true;
+  try{addMessage('assistant',await ask(text));}catch(err){addMessage('assistant','发生错误：'+err.message);}finally{send.disabled=false;input.focus();}
+});
+input.addEventListener('input',()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,160)+'px';});
+</script>
+</body>
+</html>

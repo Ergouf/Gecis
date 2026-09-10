@@ -10,3 +10,8 @@ AGY_ARCHIVE_SHA256=6bb5cfb0627f94115c397e74d17049e131d6dd1dbcafca874507296bc3652
 # package probe will be replaced by a source-commit lock.
 GLIBC_VERSION_PREFIX=2.44
 GLIBC_REPO_BASE=https://packages-cf.termux.dev/apt/termux-glibc
+
+# Same Mozilla/curl CA bundle pinned by the current Termux glibc ca-certificates
+# recipe. It is downloaded only at APK build time and bundled into the APK.
+CA_BUNDLE_DATE=2026-07-16
+CA_BUNDLE_SHA256=3ff344e30b9b1ed2971044eabb438a08f2e2245ddb5f8ab1a3ad8b63ab4eaf91

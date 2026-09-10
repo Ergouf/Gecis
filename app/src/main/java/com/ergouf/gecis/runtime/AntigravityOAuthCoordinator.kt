@@ -23,8 +23,9 @@ import javax.net.ssl.HttpsURLConnection
  * Runs Antigravity-compatible Google OAuth natively on Android.
  *
  * The OAuth client is an installed/public client. PKCE and state protect each authorization
- * attempt. Gecis listens only on 127.0.0.1:51121, exchanges the returned code through Android's
- * HTTPS stack, then stores the Antigravity credential wrapper in OAuthTokenVault.
+ * attempt. Gecis listens only on 127.0.0.1:51121, while the registered redirect URI remains
+ * localhost:51121. Token exchange uses Android's HTTPS stack and stores the resulting
+ * Antigravity credential wrapper in OAuthTokenVault.
  */
 class AntigravityOAuthCoordinator(
     private val tokenVault: OAuthTokenVault,
@@ -189,7 +190,7 @@ class AntigravityOAuthCoordinator(
         val parts = requestLine.split(' ')
         if (parts.size < 2 || parts[0] != "GET") return null
         val target = parts[1]
-        val uri = Uri.parse("http://127.0.0.1$target")
+        val uri = Uri.parse("http://localhost$target")
         return uri.takeIf { it.path == CALLBACK_PATH }
     }
 
@@ -300,7 +301,7 @@ class AntigravityOAuthCoordinator(
     companion object {
         private const val CALLBACK_PORT = 51121
         private const val CALLBACK_PATH = "/oauth-callback"
-        private const val REDIRECT_URI = "http://127.0.0.1:51121/oauth-callback"
+        private const val REDIRECT_URI = "http://localhost:51121/oauth-callback"
         private const val AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
         private const val TOKEN_URL = "https://oauth2.googleapis.com/token"
         private const val CLIENT_ID =

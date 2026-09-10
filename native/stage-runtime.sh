@@ -7,6 +7,7 @@ JNI_DIR="$ROOT/app/src/main/jniLibs/arm64-v8a"
 REPORT="$PROBE_DIR/runtime-probe.json"
 ENGINE="$PROBE_DIR/antigravity/agy.va39"
 GLIBC_ROOT="$PROBE_DIR/glibc-root"
+STAGED_MANIFEST="$PROBE_DIR/staged-runtime-manifest.json"
 
 for cmd in patchelf readelf sha256sum python3; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "missing required tool: $cmd" >&2; exit 2; }
@@ -26,9 +27,6 @@ cp "$ENGINE" "$JNI_DIR/libgecis_agy.so"
 cp "$LOADER" "$JNI_DIR/libgecis_ld.so"
 chmod 0755 "$JNI_DIR/libgecis_agy.so" "$JNI_DIR/libgecis_ld.so"
 
-# Android's JNI packager expects lib*.so names. glibc uses versioned names such as
-# libc.so.6, so stage deterministic Android-safe aliases and rewrite DT_NEEDED in
-# every staged ELF object to point at those aliases.
 declare -A RENAME=()
 while IFS= read -r lib; do
   [[ -n "$lib" ]] || continue
@@ -41,7 +39,7 @@ done < "$PROBE_DIR/found-libs.txt"
 
 rewrite_needed() {
   local elf="$1"
-  local needed old new
+  local old new
   mapfile -t needed < <(readelf -d "$elf" 2>/dev/null | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p')
   for old in "${needed[@]}"; do
     new="${RENAME[$old]:-}"
@@ -57,8 +55,6 @@ for elf in "$JNI_DIR"/libgecis_*.so; do
   rewrite_needed "$elf"
 done
 
-# Fail closed if any staged object still references one of the original versioned
-# glibc names. This catches transitive references that the direct probe did not model.
 UNRESOLVED="$PROBE_DIR/unresolved-staged-needed.txt"
 : > "$UNRESOLVED"
 for elf in "$JNI_DIR"/libgecis_*.so; do
@@ -75,31 +71,32 @@ if [[ -s "$UNRESOLVED" ]]; then
   exit 4
 fi
 
-python3 - "$JNI_DIR/runtime-manifest.json" "$REPORT" "$JNI_DIR" <<'PY'
+python3 - "$STAGED_MANIFEST" "$REPORT" "$JNI_DIR" <<'PY'
 import hashlib, json, subprocess, sys
 from pathlib import Path
 manifest_path, report_path, root_path = map(Path, sys.argv[1:])
 report = json.loads(report_path.read_text())
 files = {}
 for path in sorted(root_path.iterdir()):
-    if path.is_file() and path.name != manifest_path.name:
-        needed = []
-        if path.suffix == '.so':
-            try:
-                out = subprocess.check_output(['readelf', '-d', str(path)], text=True, stderr=subprocess.DEVNULL)
-                for line in out.splitlines():
-                    if 'Shared library:' in line and '[' in line and ']' in line:
-                        needed.append(line.split('[', 1)[1].split(']', 1)[0])
-            except subprocess.CalledProcessError:
-                pass
-        files[path.name] = {
-            'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
-            'size': path.stat().st_size,
-            'needed': needed,
-        }
+    if not path.is_file():
+        continue
+    needed = []
+    try:
+        out = subprocess.check_output(['readelf', '-d', str(path)], text=True, stderr=subprocess.DEVNULL)
+        for line in out.splitlines():
+            if 'Shared library:' in line and '[' in line and ']' in line:
+                needed.append(line.split('[', 1)[1].split(']', 1)[0])
+    except subprocess.CalledProcessError:
+        pass
+    files[path.name] = {
+        'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+        'size': path.stat().st_size,
+        'needed': needed,
+    }
 manifest = {'source': report, 'files': files}
 manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
 PY
 
 echo "Staged Android-safe runtime into $JNI_DIR"
+echo "Manifest: $STAGED_MANIFEST"
 ls -lh "$JNI_DIR"

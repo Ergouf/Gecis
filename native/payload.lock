@@ -1,0 +1,12 @@
+# Gecis native runtime source lock
+# Shell-compatible and consumed by native/probe-runtime.sh.
+
+AGY_TAG=v1.2.0
+AGY_ARCHIVE_SHA256=6bb5cfb0627f94115c397e74d17049e131d6dd1dbcafca874507296bc3652408
+
+# The Termux glibc source recipe currently builds glibc 2.44. The probe resolves
+# the exact aarch64 .deb from the repository and records its package checksum in
+# runtime-probe.json. Once the Gecis-specific glibc build exists, this external
+# package probe will be replaced by a source-commit lock.
+GLIBC_VERSION_PREFIX=2.44
+GLIBC_REPO_BASE=https://packages-cf.termux.dev/apt/termux-glibc

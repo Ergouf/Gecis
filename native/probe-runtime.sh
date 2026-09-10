@@ -12,13 +12,14 @@ EXTRACT="$OUT_DIR/antigravity"
 PACKAGES_FILE="$OUT_DIR/Packages"
 GLIBC_DEB="$OUT_DIR/glibc.deb"
 GLIBC_ROOT="$OUT_DIR/glibc-root"
+AUTH_MARKERS="$OUT_DIR/oauth-markers.txt"
 
 mkdir -p "$OUT_DIR"
 rm -rf "$EXTRACT" "$GLIBC_ROOT"
 mkdir -p "$EXTRACT" "$GLIBC_ROOT"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing required tool: $1" >&2; exit 2; }; }
-for cmd in curl tar sha256sum readelf python3 awk sed dpkg-deb grep; do need "$cmd"; done
+for cmd in curl tar sha256sum readelf python3 awk sed dpkg-deb grep sort; do need "$cmd"; done
 
 write_lines() {
   local file="$1"
@@ -44,23 +45,25 @@ INTERP="$(readelf -l "$ENGINE" | sed -n 's/.*Requesting program interpreter: \(.
 [[ "$MACHINE" == "AArch64" ]] || { echo "unexpected engine machine: $MACHINE" >&2; exit 3; }
 [[ "$CLASS" == "ELF64" ]] || { echo "unexpected engine class: $CLASS" >&2; exit 3; }
 
-echo "[3/7] Verifying OAuth file-storage contract"
-OAUTH_FILE_STORAGE_MARKER=false
-OAUTH_TOKEN_FILE_MARKER=false
-if grep -aFq 'GEMINI_FORCE_FILE_STORAGE' "$ENGINE"; then
-  OAUTH_FILE_STORAGE_MARKER=true
-fi
-if grep -aFq 'antigravity-oauth-token' "$ENGINE"; then
-  OAUTH_TOKEN_FILE_MARKER=true
-fi
-[[ "$OAUTH_FILE_STORAGE_MARKER" == "true" ]] || {
-  echo "pinned Antigravity engine no longer exposes GEMINI_FORCE_FILE_STORAGE" >&2
+echo "[3/7] Detecting OAuth credential contract"
+: > "$AUTH_MARKERS"
+grep -aoE 'GEMINI_FORCE_FILE_STORAGE|JETSKI_OAUTH_TOKEN|ANTIGRAVITY_OAUTH_TOKEN|GEMINI_CLI_OAUTH_TOKEN|antigravity-oauth-token|jetski-standalone-oauth-token|oauth_creds\.json|org\.freedesktop\.secrets' "$ENGINE" \
+  | sort -u > "$AUTH_MARKERS" || true
+cat "$AUTH_MARKERS"
+
+OAUTH_FORCE_FILE_STORAGE=false
+OAUTH_ANTIGRAVITY_TOKEN_FILE=false
+OAUTH_JETSKI_TOKEN_FILE=false
+OAUTH_ENV_TOKEN=false
+if grep -Fxq 'GEMINI_FORCE_FILE_STORAGE' "$AUTH_MARKERS"; then OAUTH_FORCE_FILE_STORAGE=true; fi
+if grep -Fxq 'antigravity-oauth-token' "$AUTH_MARKERS"; then OAUTH_ANTIGRAVITY_TOKEN_FILE=true; fi
+if grep -Fxq 'jetski-standalone-oauth-token' "$AUTH_MARKERS"; then OAUTH_JETSKI_TOKEN_FILE=true; fi
+if grep -Eq '^(JETSKI_OAUTH_TOKEN|ANTIGRAVITY_OAUTH_TOKEN|GEMINI_CLI_OAUTH_TOKEN)$' "$AUTH_MARKERS"; then OAUTH_ENV_TOKEN=true; fi
+
+if [[ "$OAUTH_ANTIGRAVITY_TOKEN_FILE" != "true" && "$OAUTH_JETSKI_TOKEN_FILE" != "true" && "$OAUTH_ENV_TOKEN" != "true" ]]; then
+  echo "pinned Antigravity engine exposes no recognized reusable OAuth credential contract" >&2
   exit 7
-}
-[[ "$OAUTH_TOKEN_FILE_MARKER" == "true" ]] || {
-  echo "pinned Antigravity engine no longer contains the expected OAuth token-file contract" >&2
-  exit 7
-}
+fi
 
 echo "[4/7] Resolving Termux glibc ${GLIBC_VERSION_PREFIX} package"
 CANDIDATE_PATHS=(
@@ -179,8 +182,11 @@ report = {
     "interpreter": ${INTERP@Q},
   },
   "oauth": {
-    "force_file_storage_marker": ${OAUTH_FILE_STORAGE_MARKER},
-    "token_file_marker": ${OAUTH_TOKEN_FILE_MARKER},
+    "markers": lines(${AUTH_MARKERS@Q}),
+    "force_file_storage": ${OAUTH_FORCE_FILE_STORAGE},
+    "antigravity_token_file": ${OAUTH_ANTIGRAVITY_TOKEN_FILE},
+    "jetski_token_file": ${OAUTH_JETSKI_TOKEN_FILE},
+    "environment_token": ${OAUTH_ENV_TOKEN},
   },
   "glibc": {
     "version": ${GLIBC_VERSION@Q},

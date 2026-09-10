@@ -8,13 +8,18 @@ import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
+import com.ergouf.gecis.runtime.AntigravityRuntime
+import com.ergouf.gecis.runtime.ChatRuntime
+import org.json.JSONObject
 
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity(), ChatRuntime.Listener {
     private lateinit var webView: WebView
+    private lateinit var runtime: ChatRuntime
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        runtime = AntigravityRuntime(applicationContext)
 
         val assetLoader = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
@@ -29,7 +34,7 @@ class MainActivity : ComponentActivity() {
             webViewClient = object : WebViewClientCompat() {
                 override fun shouldInterceptRequest(
                     view: WebView,
-                    request: android.webkit.WebResourceRequest
+                    request: android.webkit.WebResourceRequest,
                 ) = assetLoader.shouldInterceptRequest(request.url)
             }
             addJavascriptInterface(GecisBridge(), "GecisNative")
@@ -40,6 +45,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        runtime.close()
         webView.removeJavascriptInterface("GecisNative")
         webView.destroy()
         super.onDestroy()
@@ -47,11 +53,32 @@ class MainActivity : ComponentActivity() {
 
     inner class GecisBridge {
         @JavascriptInterface
-        fun sendMessage(text: String): String {
-            // TODO: replace with the local Antigravity runtime bridge.
-            // Keep the WebView isolated from fenbi.db and runtime process details.
-            val block = "${'$'}${'$'}"
-            return "你问的是：$text\n\n当前原生桥已经接通。下一步把这里替换成本地 AI runtime 调用即可。\n\n公式示例：${block}\\frac{a}{b}+\\sqrt{x^2+y^2}${block}"
+        fun sendMessage(requestId: String, text: String) {
+            runtime.send(requestId, text, this@MainActivity)
         }
+    }
+
+    override fun onDelta(requestId: String, text: String) {
+        emit("delta", requestId, text)
+    }
+
+    override fun onComplete(requestId: String, text: String) {
+        emit("complete", requestId, text)
+    }
+
+    override fun onError(requestId: String, message: String) {
+        emit("error", requestId, message)
+    }
+
+    private fun emit(type: String, requestId: String, text: String) {
+        val payload = JSONObject()
+            .put("type", type)
+            .put("requestId", requestId)
+            .put("text", text)
+            .toString()
+        webView.evaluateJavascript(
+            "window.GecisChat && window.GecisChat.onNativeEvent($payload);",
+            null,
+        )
     }
 }

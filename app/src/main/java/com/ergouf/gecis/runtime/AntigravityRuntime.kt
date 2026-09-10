@@ -250,7 +250,10 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
 
 internal object AntigravityEnvironment {
     private const val HOME_DIR = "agy-home"
-    private const val TOKEN_RELATIVE_PATH = ".gemini/antigravity-cli/antigravity-oauth-token"
+    private val TOKEN_RELATIVE_PATHS = listOf(
+        ".gemini/antigravity-cli/antigravity-oauth-token",
+        ".gemini/jetski-standalone-oauth-token",
+    )
 
     fun home(context: Context): File = File(context.noBackupFilesDir, HOME_DIR)
 
@@ -271,21 +274,26 @@ internal object AntigravityEnvironment {
         return home
     }
 
-    fun tokenFile(context: Context): File = File(home(context), TOKEN_RELATIVE_PATH)
+    fun tokenFiles(context: Context): List<File> =
+        TOKEN_RELATIVE_PATHS.map { File(home(context), it) }
 
-    fun hasPersistedOAuthToken(context: Context): Boolean {
-        val file = tokenFile(context)
+    fun hasPersistedOAuthToken(context: Context): Boolean =
+        tokenFiles(context).any(::containsRefreshToken)
+
+    fun clearPersistedOAuthToken(context: Context) {
+        tokenFiles(context).forEach { it.delete() }
+    }
+
+    private fun containsRefreshToken(file: File): Boolean {
         if (!file.isFile || file.length() == 0L) return false
         return try {
             val root = JSONObject(file.readText())
-            root.optJSONObject("token")?.optString("refresh_token").orEmpty().isNotBlank()
+            val nested = root.optJSONObject("token")?.optString("refresh_token").orEmpty()
+            val direct = root.optString("refresh_token").orEmpty()
+            nested.isNotBlank() || direct.isNotBlank()
         } catch (_: Throwable) {
             false
         }
-    }
-
-    fun clearPersistedOAuthToken(context: Context) {
-        tokenFile(context).delete()
     }
 
     fun baseEnvironment(context: Context, home: File = prepareHome(context)): Map<String, String> = mapOf(

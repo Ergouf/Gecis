@@ -3,6 +3,7 @@ package com.ergouf.gecis.runtime
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import com.ergouf.gecis.auth.OAuthTokenVault
 import java.io.BufferedReader
 import java.io.BufferedWriter
 import java.io.InputStreamReader
@@ -17,7 +18,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  * scopes, state and token exchange. The app only opens the generated URL and forwards the
  * one-time authorization code back to the same Antigravity process.
  */
-class AntigravityOAuthCoordinator(private val context: Context) : AutoCloseable {
+class AntigravityOAuthCoordinator(
+    private val context: Context,
+    private val tokenVault: OAuthTokenVault,
+) : AutoCloseable {
     interface Listener {
         fun onAuthorizationUrl(url: String)
         fun onAuthorizationCodeRequested()
@@ -52,6 +56,9 @@ class AntigravityOAuthCoordinator(private val context: Context) : AutoCloseable 
             transcript.setLength(0)
         }
 
+        // Do not let a stale plaintext file satisfy the completion check for a new login.
+        AntigravityEnvironment.clearPlaintextOAuthTokens(context)
+
         io.execute {
             try {
                 val spec = NativeRuntimeSpec.resolve(context)
@@ -63,13 +70,13 @@ class AntigravityOAuthCoordinator(private val context: Context) : AutoCloseable 
                 builder.environment().apply {
                     remove("LD_PRELOAD")
                     remove("LD_LIBRARY_PATH")
+                    remove("JETSKI_OAUTH_TOKEN")
                     putAll(AntigravityEnvironment.baseEnvironment(context, home))
                     // Force Antigravity's documented remote OAuth handoff instead of xdg-open.
                     put("SSH_CONNECTION", "127.0.0.1 1 127.0.0.1 2")
                     put("TERM", "xterm-256color")
                     put("NO_COLOR", "1")
                     // Antigravity has historically hard-wrapped long OAuth URLs to terminal width.
-                    // A very wide logical terminal keeps the browser URL intact when output is piped.
                     put("COLUMNS", "4096")
                     put("LINES", "80")
                 }
@@ -92,7 +99,11 @@ class AntigravityOAuthCoordinator(private val context: Context) : AutoCloseable 
                 }
 
                 if (!authenticated && !closed.get() && !cancelled) {
-                    fail("Google OAuth 进程已退出。${tailTranscript()}")
+                    if (captureCredential()) {
+                        markAuthenticated()
+                    } else {
+                        fail("Google OAuth 进程已退出。${tailTranscript()}")
+                    }
                 }
             } catch (error: Throwable) {
                 if (!closed.get() && !cancelled) fail(error.message ?: "无法启动 Google OAuth")
@@ -138,6 +149,7 @@ class AntigravityOAuthCoordinator(private val context: Context) : AutoCloseable 
             writer = null
             process = null
         }
+        AntigravityEnvironment.clearPlaintextOAuthTokens(context)
     }
 
     private fun inspect(raw: String) {
@@ -171,10 +183,18 @@ class AntigravityOAuthCoordinator(private val context: Context) : AutoCloseable 
             main.post { listener?.onAuthorizationCodeRequested() }
         }
 
-        if (!authenticated && AntigravityEnvironment.hasPersistedOAuthToken(context)) {
-            authenticated = true
-            main.post { listener?.onAuthenticated() }
+        if (!authenticated && captureCredential()) {
+            markAuthenticated()
         }
+    }
+
+    private fun captureCredential(): Boolean =
+        AntigravityEnvironment.capturePlaintextOAuthToken(context, tokenVault)
+
+    private fun markAuthenticated() {
+        if (authenticated) return
+        authenticated = true
+        main.post { listener?.onAuthenticated() }
     }
 
     private fun fail(message: String) {

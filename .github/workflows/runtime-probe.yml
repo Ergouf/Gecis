@@ -1,0 +1,38 @@
+name: Runtime probe
+
+on:
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'app/src/main/java/com/ergouf/gecis/runtime/**'
+      - '.github/workflows/runtime-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe-arm64-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install probe tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils dpkg-dev
+
+      - name: Probe pinned runtime
+        run: bash native/probe-runtime.sh
+
+      - name: Upload probe report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-probe
+          path: |
+            native/.probe/runtime-probe.json
+            native/.probe/found-libs.txt
+            native/.probe/missing-libs.txt
+          if-no-files-found: warn

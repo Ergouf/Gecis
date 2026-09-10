@@ -20,6 +20,15 @@ mkdir -p "$EXTRACT" "$GLIBC_ROOT"
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing required tool: $1" >&2; exit 2; }; }
 for cmd in curl tar sha256sum readelf python3 awk sed dpkg-deb; do need "$cmd"; done
 
+write_lines() {
+  local file="$1"
+  shift
+  : > "$file"
+  if (($#)); then
+    printf '%s\n' "$@" > "$file"
+  fi
+}
+
 AGY_URL="https://github.com/wallentx/antigravity-cli-termux/releases/download/${AGY_TAG}/antigravity-termux-standalone.tar.gz"
 echo "[1/6] Downloading pinned Antigravity payload ${AGY_TAG}"
 curl -fL --retry 3 --retry-delay 2 "$AGY_URL" -o "$ARCHIVE"
@@ -92,13 +101,13 @@ dpkg-deb -x "$GLIBC_DEB" "$GLIBC_ROOT"
 LOADER="$(find "$GLIBC_ROOT" -type f \( -name 'ld-linux-aarch64.so.1' -o -name 'ld-*.so' \) -print -quit)"
 [[ -n "$LOADER" ]] || { echo "glibc loader not found in package" >&2; exit 5; }
 
-LIB_ROOT="$(dirname "$LOADER")"
 echo "[5/6] Computing direct DT_NEEDED closure"
 mapfile -t NEEDED < <(readelf -d "$ENGINE" | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p' | sort -u)
 MISSING=()
 FOUND=()
 for lib in "${NEEDED[@]}"; do
-  path="$(find "$GLIBC_ROOT" -type f -o -type l | grep "/${lib}$" | head -n 1 || true)"
+  [[ -n "$lib" ]] || continue
+  path="$(find "$GLIBC_ROOT" \( -type f -o -type l \) -name "$lib" -print -quit)"
   if [[ -n "$path" ]]; then
     FOUND+=("$lib")
   else
@@ -106,8 +115,9 @@ for lib in "${NEEDED[@]}"; do
   fi
 done
 
-printf '%s\n' "${FOUND[@]:-}" > "$OUT_DIR/found-libs.txt"
-printf '%s\n' "${MISSING[@]:-}" > "$OUT_DIR/missing-libs.txt"
+write_lines "$OUT_DIR/needed-libs.txt" "${NEEDED[@]}"
+write_lines "$OUT_DIR/found-libs.txt" "${FOUND[@]}"
+write_lines "$OUT_DIR/missing-libs.txt" "${MISSING[@]}"
 
 ENGINE_SHA256="$(sha256sum "$ENGINE" | awk '{print $1}')"
 LOADER_SHA256="$(sha256sum "$LOADER" | awk '{print $1}')"
@@ -115,6 +125,10 @@ LOADER_SHA256="$(sha256sum "$LOADER" | awk '{print $1}')"
 python3 - "$REPORT" <<PY
 import json
 from pathlib import Path
+
+def lines(path):
+    return [line for line in Path(path).read_text().splitlines() if line]
+
 report = {
   "antigravity": {
     "tag": ${AGY_TAG@Q},
@@ -130,8 +144,9 @@ report = {
     "loader_sha256": ${LOADER_SHA256@Q},
     "packages_index": ${PACKAGES_URL@Q},
   },
-  "direct_needed": Path(${OUT_DIR@Q} + "/found-libs.txt").read_text().splitlines(),
-  "missing_needed": Path(${OUT_DIR@Q} + "/missing-libs.txt").read_text().splitlines(),
+  "direct_needed": lines(${OUT_DIR@Q} + "/needed-libs.txt"),
+  "found_needed": lines(${OUT_DIR@Q} + "/found-libs.txt"),
+  "missing_needed": lines(${OUT_DIR@Q} + "/missing-libs.txt"),
 }
 Path(${REPORT@Q}).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
 PY

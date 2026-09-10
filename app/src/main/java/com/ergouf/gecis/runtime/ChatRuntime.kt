@@ -6,6 +6,7 @@ interface ChatRuntime : AutoCloseable {
     interface Listener {
         fun onDelta(requestId: String, text: String)
         fun onComplete(requestId: String, text: String)
+        fun onAuthenticationRequired(requestId: String)
         fun onError(requestId: String, message: String)
     }
 }

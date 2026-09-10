@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.ergouf.gecis.auth.OAuthTokenVault
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.BufferedWriter
@@ -13,7 +14,10 @@ import java.io.OutputStreamWriter
 import java.util.concurrent.Executors
 
 /** Owns one long-lived authenticated Antigravity headless process. */
-class AntigravityRuntime(private val context: Context) : ChatRuntime {
+class AntigravityRuntime(
+    private val context: Context,
+    private val tokenVault: OAuthTokenVault,
+) : ChatRuntime {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val io = Executors.newCachedThreadPool()
     private val lock = Any()
@@ -30,6 +34,12 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
         }
 
         io.execute {
+            val oauthCredential = tokenVault.load()
+            if (oauthCredential == null) {
+                mainHandler.post { listener.onAuthenticationRequired(requestId) }
+                return@execute
+            }
+
             var localWriter: BufferedWriter? = null
             try {
                 synchronized(lock) {
@@ -37,7 +47,7 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
                     check(pending == null) { "上一条消息仍在生成中" }
                     pending = Pending(requestId, listener)
                     try {
-                        ensureProcessLocked()
+                        ensureProcessLocked(oauthCredential)
                         localWriter = writer ?: error("AI runtime stdin 不可用")
                     } catch (error: Throwable) {
                         pending = null
@@ -70,7 +80,7 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
         }
     }
 
-    private fun ensureProcessLocked() {
+    private fun ensureProcessLocked(oauthCredential: String) {
         if (process?.isAlive == true && writer != null) return
 
         resetProcessLocked()
@@ -84,6 +94,9 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
             remove("LD_PRELOAD")
             remove("LD_LIBRARY_PATH")
             putAll(AntigravityEnvironment.baseEnvironment(context, home))
+            // v1.2.0 exposes this credential entry point directly. Keep the OAuth JSON out of
+            // WebView/state files and inject it only into the child process environment.
+            put("JETSKI_OAUTH_TOKEN", oauthCredential)
         }
 
         val newProcess = builder.start()
@@ -148,7 +161,8 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
             }
         }
         active?.let { value ->
-            AntigravityEnvironment.clearPersistedOAuthToken(context)
+            tokenVault.clear()
+            AntigravityEnvironment.clearPlaintextOAuthTokens(context)
             mainHandler.post { value.listener.onAuthenticationRequired(value.requestId) }
         }
     }
@@ -183,7 +197,8 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
                 } ?: return
 
                 if (isAuthenticationRequired(errorText)) {
-                    AntigravityEnvironment.clearPersistedOAuthToken(context)
+                    tokenVault.clear()
+                    AntigravityEnvironment.clearPlaintextOAuthTokens(context)
                     mainHandler.post { active.listener.onAuthenticationRequired(active.requestId) }
                 } else if (errorText.isNotBlank() || status in TERMINAL_ERRORS) {
                     deliverError(
@@ -251,8 +266,9 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
 internal object AntigravityEnvironment {
     private const val HOME_DIR = "agy-home"
     private val TOKEN_RELATIVE_PATHS = listOf(
-        ".gemini/antigravity-cli/antigravity-oauth-token",
         ".gemini/jetski-standalone-oauth-token",
+        ".gemini/antigravity-cli/jetski-standalone-oauth-token",
+        ".gemini/antigravity-cli/antigravity-oauth-token",
     )
 
     fun home(context: Context): File = File(context.noBackupFilesDir, HOME_DIR)
@@ -266,9 +282,7 @@ internal object AntigravityEnvironment {
         } catch (_: Throwable) {
             JSONObject()
         }
-        // Standard account OAuth must not inherit the Gemini API-key provider switch.
         settings.remove("modelProvider")
-        // Remote OAuth is easier to machine-drive in inline rendering mode.
         settings.put("altScreenMode", "never")
         settingsFile.writeText(settings.toString())
         return home
@@ -277,33 +291,33 @@ internal object AntigravityEnvironment {
     fun tokenFiles(context: Context): List<File> =
         TOKEN_RELATIVE_PATHS.map { File(home(context), it) }
 
-    fun hasPersistedOAuthToken(context: Context): Boolean =
-        tokenFiles(context).any(::containsRefreshToken)
+    fun capturePlaintextOAuthToken(context: Context, vault: OAuthTokenVault): Boolean {
+        for (file in tokenFiles(context)) {
+            if (!file.isFile || file.length() == 0L) continue
+            try {
+                vault.save(file.readText())
+                clearPlaintextOAuthTokens(context)
+                return true
+            } catch (_: Throwable) {
+                // Keep looking; different Antigravity builds use different token locations.
+            }
+        }
+        return false
+    }
 
-    fun clearPersistedOAuthToken(context: Context) {
+    fun clearPlaintextOAuthTokens(context: Context) {
         tokenFiles(context).forEach { it.delete() }
     }
 
-    private fun containsRefreshToken(file: File): Boolean {
-        if (!file.isFile || file.length() == 0L) return false
-        return try {
-            val root = JSONObject(file.readText())
-            val nested = root.optJSONObject("token")?.optString("refresh_token").orEmpty()
-            val direct = root.optString("refresh_token").orEmpty()
-            nested.isNotBlank() || direct.isNotBlank()
-        } catch (_: Throwable) {
-            false
-        }
+    fun baseEnvironment(context: Context, home: File = prepareHome(context)): Map<String, String> {
+        val appData = File(home, ".gemini/antigravity-cli").apply { mkdirs() }
+        return mapOf(
+            "HOME" to home.absolutePath,
+            "TMPDIR" to context.cacheDir.absolutePath,
+            "GODEBUG" to "netdns=cgo",
+            "JETSKI_APP_DATA_DIR" to appData.absolutePath,
+        )
     }
-
-    fun baseEnvironment(context: Context, home: File = prepareHome(context)): Map<String, String> = mapOf(
-        "HOME" to home.absolutePath,
-        "TMPDIR" to context.cacheDir.absolutePath,
-        "GODEBUG" to "netdns=cgo",
-        // Current Antigravity builds expose a file-backed token store for headless/container use.
-        // Keep it inside Android's app-private no-backup directory rather than requiring D-Bus.
-        "GEMINI_FORCE_FILE_STORAGE" to "true",
-    )
 }
 
 internal data class NativeRuntimeSpec(

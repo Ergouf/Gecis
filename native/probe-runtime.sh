@@ -18,7 +18,7 @@ rm -rf "$EXTRACT" "$GLIBC_ROOT"
 mkdir -p "$EXTRACT" "$GLIBC_ROOT"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing required tool: $1" >&2; exit 2; }; }
-for cmd in curl tar sha256sum readelf python3 awk sed dpkg-deb; do need "$cmd"; done
+for cmd in curl tar sha256sum readelf python3 awk sed dpkg-deb grep; do need "$cmd"; done
 
 write_lines() {
   local file="$1"
@@ -30,13 +30,13 @@ write_lines() {
 }
 
 AGY_URL="https://github.com/wallentx/antigravity-cli-termux/releases/download/${AGY_TAG}/antigravity-termux-standalone.tar.gz"
-echo "[1/6] Downloading pinned Antigravity payload ${AGY_TAG}"
+echo "[1/7] Downloading pinned Antigravity payload ${AGY_TAG}"
 curl -fL --retry 3 --retry-delay 2 "$AGY_URL" -o "$ARCHIVE"
 echo "${AGY_ARCHIVE_SHA256}  ${ARCHIVE}" | sha256sum -c -
 
 tar -xzf "$ARCHIVE" -C "$EXTRACT" agy agy.va39
 
-echo "[2/6] Verifying engine ELF"
+echo "[2/7] Verifying engine ELF"
 ENGINE="$EXTRACT/agy.va39"
 MACHINE="$(readelf -h "$ENGINE" | awk -F: '/Machine:/{gsub(/^[ \t]+/,"",$2); print $2}')"
 CLASS="$(readelf -h "$ENGINE" | awk -F: '/Class:/{gsub(/^[ \t]+/,"",$2); print $2}')"
@@ -44,7 +44,25 @@ INTERP="$(readelf -l "$ENGINE" | sed -n 's/.*Requesting program interpreter: \(.
 [[ "$MACHINE" == "AArch64" ]] || { echo "unexpected engine machine: $MACHINE" >&2; exit 3; }
 [[ "$CLASS" == "ELF64" ]] || { echo "unexpected engine class: $CLASS" >&2; exit 3; }
 
-echo "[3/6] Resolving Termux glibc ${GLIBC_VERSION_PREFIX} package"
+echo "[3/7] Verifying OAuth file-storage contract"
+OAUTH_FILE_STORAGE_MARKER=false
+OAUTH_TOKEN_FILE_MARKER=false
+if grep -aFq 'GEMINI_FORCE_FILE_STORAGE' "$ENGINE"; then
+  OAUTH_FILE_STORAGE_MARKER=true
+fi
+if grep -aFq 'antigravity-oauth-token' "$ENGINE"; then
+  OAUTH_TOKEN_FILE_MARKER=true
+fi
+[[ "$OAUTH_FILE_STORAGE_MARKER" == "true" ]] || {
+  echo "pinned Antigravity engine no longer exposes GEMINI_FORCE_FILE_STORAGE" >&2
+  exit 7
+}
+[[ "$OAUTH_TOKEN_FILE_MARKER" == "true" ]] || {
+  echo "pinned Antigravity engine no longer contains the expected OAuth token-file contract" >&2
+  exit 7
+}
+
+echo "[4/7] Resolving Termux glibc ${GLIBC_VERSION_PREFIX} package"
 CANDIDATE_PATHS=(
   "dists/glibc/stable/binary-aarch64/Packages"
   "dists/stable/main/binary-aarch64/Packages"
@@ -89,7 +107,7 @@ PY
 # shellcheck source=/dev/null
 source "$OUT_DIR/glibc-meta.env"
 
-echo "[4/6] Downloading and verifying glibc $GLIBC_VERSION"
+echo "[5/7] Downloading and verifying glibc $GLIBC_VERSION"
 curl -fL --retry 3 --retry-delay 2 "${GLIBC_REPO_BASE}/${GLIBC_FILENAME}" -o "$GLIBC_DEB"
 echo "${GLIBC_SHA256}  ${GLIBC_DEB}" | sha256sum -c -
 dpkg-deb -x "$GLIBC_DEB" "$GLIBC_ROOT"
@@ -97,7 +115,7 @@ dpkg-deb -x "$GLIBC_DEB" "$GLIBC_ROOT"
 LOADER="$(find "$GLIBC_ROOT" -type f \( -name 'ld-linux-aarch64.so.1' -o -name 'ld-*.so' \) -print -quit)"
 [[ -n "$LOADER" ]] || { echo "glibc loader not found in package" >&2; exit 5; }
 
-echo "[5/6] Computing transitive DT_NEEDED closure"
+echo "[6/7] Computing transitive DT_NEEDED closure"
 python3 - "$ENGINE" "$GLIBC_ROOT" "$OUT_DIR" <<'PY'
 import re, subprocess, sys
 from pathlib import Path
@@ -160,6 +178,10 @@ report = {
     "class": ${CLASS@Q},
     "interpreter": ${INTERP@Q},
   },
+  "oauth": {
+    "force_file_storage_marker": ${OAUTH_FILE_STORAGE_MARKER},
+    "token_file_marker": ${OAUTH_TOKEN_FILE_MARKER},
+  },
   "glibc": {
     "version": ${GLIBC_VERSION@Q},
     "package_sha256": ${GLIBC_SHA256@Q},
@@ -179,4 +201,4 @@ if [[ -s "$OUT_DIR/missing-libs.txt" ]]; then
   exit 6
 fi
 
-echo "[6/6] Probe succeeded"
+echo "[7/7] Probe succeeded"

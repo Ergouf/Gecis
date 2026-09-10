@@ -13,5 +13,6 @@ local.properties
 *.db-shm
 *.db-wal
 
-# Native payloads are produced by the verified runtime build pipeline.
-app/src/main/jniLibs/**/libgecis_*.so
+# Native payloads are generated from pinned/verified inputs and are never committed.
+native/.probe/
+app/src/main/jniLibs/arm64-v8a/

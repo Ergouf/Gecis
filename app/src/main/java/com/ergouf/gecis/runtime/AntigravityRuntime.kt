@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.ergouf.gecis.auth.ApiKeyStore
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.BufferedWriter
@@ -22,7 +23,10 @@ import java.util.concurrent.Executors
  * restrictions make that fragile and unsafe. A release build must package the verified loader
  * and patched engine in the APK's native library directory.
  */
-class AntigravityRuntime(private val context: Context) : ChatRuntime {
+class AntigravityRuntime(
+    private val context: Context,
+    private val apiKeyStore: ApiKeyStore,
+) : ChatRuntime {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val io = Executors.newCachedThreadPool()
     private val lock = Any()
@@ -78,7 +82,12 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
         if (process?.isAlive == true && writer != null) return
 
         resetProcessLocked()
+        val apiKey = apiKeyStore.load()
+            ?: throw AuthenticationRequiredException("需要先设置 Gemini API Key")
         val spec = NativeRuntimeSpec.resolve(context)
+        val home = File(context.filesDir, "agy-home").apply { mkdirs() }
+        ensureGeminiProviderSettings(home)
+
         val builder = ProcessBuilder(spec.command)
             .directory(context.noBackupFilesDir)
             .redirectErrorStream(false)
@@ -86,9 +95,10 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
         builder.environment().apply {
             remove("LD_PRELOAD")
             remove("LD_LIBRARY_PATH")
-            put("HOME", File(context.filesDir, "agy-home").apply { mkdirs() }.absolutePath)
+            put("HOME", home.absolutePath)
             put("TMPDIR", context.cacheDir.absolutePath)
             put("GODEBUG", "netdns=cgo")
+            put("GEMINI_API_KEY", apiKey)
             putAll(spec.environment)
         }
 
@@ -98,6 +108,18 @@ class AntigravityRuntime(private val context: Context) : ChatRuntime {
 
         io.execute { readStdout(newProcess) }
         io.execute { drainStderr(newProcess) }
+    }
+
+    private fun ensureGeminiProviderSettings(home: File) {
+        val settingsDir = File(home, ".gemini/antigravity-cli")
+        check(settingsDir.exists() || settingsDir.mkdirs()) {
+            "无法创建 Antigravity 配置目录"
+        }
+        val settings = File(settingsDir, "settings.json")
+        val expected = JSONObject().put("modelProvider", "gemini").toString()
+        if (!settings.isFile || settings.readText() != expected) {
+            settings.writeText(expected)
+        }
     }
 
     private fun readStdout(owner: Process) {
@@ -256,3 +278,4 @@ internal data class NativeRuntimeSpec(
 }
 
 internal class RuntimeUnavailableException(message: String) : IllegalStateException(message)
+internal class AuthenticationRequiredException(message: String) : IllegalStateException(message)

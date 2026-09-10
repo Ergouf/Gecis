@@ -140,7 +140,8 @@ class AntigravityOAuthCoordinator(
 
     private fun waitForAuthorizationCode(server: ServerSocket, expectedState: String): String {
         while (!cancelled && !closed) {
-            server.accept().use { socket ->
+            val socket = server.accept()
+            try {
                 val callback = readCallback(socket)
                 if (callback == null) {
                     respond(socket, 404, "Not Found")
@@ -166,6 +167,11 @@ class AntigravityOAuthCoordinator(
 
                 redirectToSuccess(socket)
                 return code
+            } finally {
+                try {
+                    socket.close()
+                } catch (_: Throwable) {
+                }
             }
         }
         throw IllegalStateException("Google 登录已取消")
@@ -196,11 +202,10 @@ class AntigravityOAuthCoordinator(
             append("Content-Length: ${bodyBytes.size}\r\n")
             append("Connection: close\r\n\r\n")
         }.toByteArray(Charsets.US_ASCII)
-        socket.getOutputStream().use { output ->
-            output.write(headers)
-            output.write(bodyBytes)
-            output.flush()
-        }
+        val output = socket.getOutputStream()
+        output.write(headers)
+        output.write(bodyBytes)
+        output.flush()
     }
 
     private fun redirectToSuccess(socket: Socket) {
@@ -210,10 +215,9 @@ class AntigravityOAuthCoordinator(
             append("Content-Length: 0\r\n")
             append("Connection: close\r\n\r\n")
         }.toByteArray(Charsets.US_ASCII)
-        socket.getOutputStream().use { output ->
-            output.write(response)
-            output.flush()
-        }
+        val output = socket.getOutputStream()
+        output.write(response)
+        output.flush()
     }
 
     private fun exchangeCode(code: String, verifier: String): JSONObject {

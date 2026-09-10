@@ -311,11 +311,13 @@ internal object AntigravityEnvironment {
 
     fun baseEnvironment(context: Context, home: File = prepareHome(context)): Map<String, String> {
         val appData = File(home, ".gemini/antigravity-cli").apply { mkdirs() }
+        val network = RuntimeNetworkEnvironment.prepare(context)
         return mapOf(
             "HOME" to home.absolutePath,
             "TMPDIR" to context.cacheDir.absolutePath,
             "GODEBUG" to "netdns=cgo",
             "JETSKI_APP_DATA_DIR" to appData.absolutePath,
+            "SSL_CERT_FILE" to network.caBundle.absolutePath,
         )
     }
 }

@@ -17,6 +17,8 @@
     .message{margin:0 0 26px;line-height:1.72;font-size:16px}.user{display:flex;justify-content:flex-end}
     .user .bubble{max-width:82%;background:#e9e9e5;border-radius:20px 20px 5px 20px;padding:11px 15px;white-space:pre-wrap}
     .assistant .bubble{max-width:100%;white-space:pre-wrap}.assistant .katex-display{overflow-x:auto;overflow-y:hidden;padding:8px 0}
+    .assistant.pending .bubble::after{content:"";display:inline-block;width:6px;height:1em;margin-left:4px;background:#777;vertical-align:-2px;animation:blink 1s steps(1) infinite}
+    @keyframes blink{50%{opacity:0}}
     .composer-wrap{position:fixed;left:0;right:0;bottom:0;padding:12px 14px calc(12px + env(safe-area-inset-bottom));background:linear-gradient(transparent,#f7f7f5 24%,#f7f7f5)}
     .composer{width:min(760px,100%);margin:0 auto;background:white;border:1px solid #deded9;border-radius:24px;padding:9px 10px 9px 16px;display:flex;align-items:flex-end;gap:8px;box-shadow:0 8px 30px rgba(0,0,0,.07)}
     textarea{flex:1;resize:none;border:0;outline:0;font:inherit;line-height:1.45;max-height:160px;min-height:28px;padding:5px 0;background:transparent;color:#171717}
@@ -26,7 +28,7 @@
 </head>
 <body>
 <div class="app">
-  <header><div class="brand">Gecis</div><div class="status">本地学习助手</div></header>
+  <header><div class="brand">Gecis</div><div class="status" id="status">本地学习助手</div></header>
   <main id="messages"><section id="empty" class="empty"><h1>想学什么？</h1><p>直接提问。支持 Markdown 与数学公式。</p></section></main>
   <div class="composer-wrap"><form id="form" class="composer"><textarea id="input" rows="1" placeholder="问一道题、一个概念，或让它解释公式…"></textarea><button id="send" type="submit" aria-label="发送">↑</button></form></div>
 </div>
@@ -36,6 +38,8 @@ const empty=document.getElementById('empty');
 const form=document.getElementById('form');
 const input=document.getElementById('input');
 const send=document.getElementById('send');
+const status=document.getElementById('status');
+let active=null;
 function escapeHtml(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 function renderMath(node){
   if(!window.renderMathInElement)return;
@@ -44,20 +48,41 @@ function renderMath(node){
     {left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false}
   ],throwOnError:false});
 }
-function addMessage(role,text){
+function renderText(node,text){node.innerHTML=escapeHtml(text).replace(/\n/g,'<br>');renderMath(node);}
+function addMessage(role,text,requestId){
   empty?.remove();
-  const row=document.createElement('section');row.className=`message ${role}`;
-  const bubble=document.createElement('div');bubble.className='bubble';bubble.innerHTML=escapeHtml(text).replace(/\n/g,'<br>');
-  row.appendChild(bubble);messages.appendChild(row);renderMath(bubble);window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});
+  const row=document.createElement('section');row.className=`message ${role}`;if(requestId)row.dataset.requestId=requestId;
+  const bubble=document.createElement('div');bubble.className='bubble';renderText(bubble,text);
+  row.appendChild(bubble);messages.appendChild(row);window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});return row;
 }
-async function ask(text){
-  if(window.GecisNative?.sendMessage)return window.GecisNative.sendMessage(text);
-  return '原生 AI 桥尚未连接。';
+function beginAssistant(requestId){
+  const row=addMessage('assistant','',requestId);row.classList.add('pending');
+  active={requestId,row,bubble:row.querySelector('.bubble'),text:''};return active;
 }
-form.addEventListener('submit',async e=>{
-  e.preventDefault();const text=input.value.trim();if(!text)return;
-  addMessage('user',text);input.value='';send.disabled=true;
-  try{addMessage('assistant',await ask(text));}catch(err){addMessage('assistant','发生错误：'+err.message);}finally{send.disabled=false;input.focus();}
+function finish(){send.disabled=false;status.textContent='本地学习助手';input.focus();}
+window.GecisChat={
+  onNativeEvent(event){
+    if(!active||event.requestId!==active.requestId)return;
+    if(event.type==='delta'){
+      active.text+=event.text;renderText(active.bubble,active.text);window.scrollTo({top:document.body.scrollHeight});return;
+    }
+    active.row.classList.remove('pending');
+    if(event.type==='complete'){
+      active.text=event.text||active.text;renderText(active.bubble,active.text);
+    }else if(event.type==='error'){
+      active.text='发生错误：'+event.text;renderText(active.bubble,active.text);
+    }
+    active=null;finish();
+  }
+};
+form.addEventListener('submit',e=>{
+  e.preventDefault();const text=input.value.trim();if(!text||active)return;
+  const requestId=(crypto.randomUUID?.()||`${Date.now()}-${Math.random()}`);
+  addMessage('user',text);input.value='';input.style.height='auto';send.disabled=true;status.textContent='正在思考…';beginAssistant(requestId);
+  try{
+    if(!window.GecisNative?.sendMessage)throw new Error('原生 AI 桥尚未连接');
+    window.GecisNative.sendMessage(requestId,text);
+  }catch(err){window.GecisChat.onNativeEvent({type:'error',requestId,text:err.message});}
 });
 input.addEventListener('input',()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,160)+'px';});
 </script>

@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import com.ergouf.gecis.auth.ApiKeyStore
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.BufferedWriter
@@ -13,20 +12,8 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.util.concurrent.Executors
 
-/**
- * Owns one long-lived Antigravity headless process.
- *
- * The process protocol is NDJSON in both directions:
- *   agy --input-format stream-json --output-format stream-json
- *
- * Native payloads are intentionally not downloaded at runtime. Android 10+ executable-code
- * restrictions make that fragile and unsafe. A release build must package the verified loader
- * and patched engine in the APK's native library directory.
- */
-class AntigravityRuntime(
-    private val context: Context,
-    private val apiKeyStore: ApiKeyStore,
-) : ChatRuntime {
+/** Owns one long-lived authenticated Antigravity headless process. */
+class AntigravityRuntime(private val context: Context) : ChatRuntime {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val io = Executors.newCachedThreadPool()
     private val lock = Any()
@@ -82,24 +69,16 @@ class AntigravityRuntime(
         if (process?.isAlive == true && writer != null) return
 
         resetProcessLocked()
-        val apiKey = apiKeyStore.load()
-            ?: throw AuthenticationRequiredException("需要先设置 Gemini API Key")
         val spec = NativeRuntimeSpec.resolve(context)
-        val home = File(context.filesDir, "agy-home").apply { mkdirs() }
-        ensureGeminiProviderSettings(home)
-
-        val builder = ProcessBuilder(spec.command)
+        val home = AntigravityEnvironment.prepareHome(context)
+        val builder = ProcessBuilder(spec.headlessCommand())
             .directory(context.noBackupFilesDir)
             .redirectErrorStream(false)
 
         builder.environment().apply {
             remove("LD_PRELOAD")
             remove("LD_LIBRARY_PATH")
-            put("HOME", home.absolutePath)
-            put("TMPDIR", context.cacheDir.absolutePath)
-            put("GODEBUG", "netdns=cgo")
-            put("GEMINI_API_KEY", apiKey)
-            putAll(spec.environment)
+            putAll(AntigravityEnvironment.baseEnvironment(context, home))
         }
 
         val newProcess = builder.start()
@@ -108,18 +87,6 @@ class AntigravityRuntime(
 
         io.execute { readStdout(newProcess) }
         io.execute { drainStderr(newProcess) }
-    }
-
-    private fun ensureGeminiProviderSettings(home: File) {
-        val settingsDir = File(home, ".gemini/antigravity-cli")
-        check(settingsDir.exists() || settingsDir.mkdirs()) {
-            "无法创建 Antigravity 配置目录"
-        }
-        val settings = File(settingsDir, "settings.json")
-        val expected = JSONObject().put("modelProvider", "gemini").toString()
-        if (!settings.isFile || settings.readText() != expected) {
-            settings.writeText(expected)
-        }
     }
 
     private fun readStdout(owner: Process) {
@@ -141,7 +108,7 @@ class AntigravityRuntime(
                 value
             }
             active?.let {
-                deliverError(it.listener, it.requestId, "AI runtime 已退出，请重试")
+                deliverError(it.listener, it.requestId, "AI runtime 已退出，请重新登录或重试")
             }
         }
     }
@@ -168,7 +135,6 @@ class AntigravityRuntime(
             "step_update" -> {
                 val delta = event.optJSONObject("step_update")?.optString("text_delta").orEmpty()
                 if (delta.isEmpty()) return
-
                 val active = synchronized(lock) {
                     pending?.also { it.buffer.append(delta) }
                 } ?: return
@@ -180,7 +146,6 @@ class AntigravityRuntime(
                 val status = result.optString("status")
                 val errorText = result.optString("error")
                 val response = result.optString("response")
-
                 val active = synchronized(lock) {
                     val value = pending
                     pending = null
@@ -195,9 +160,7 @@ class AntigravityRuntime(
                     )
                 } else {
                     val finalText = response.ifBlank { active.buffer.toString() }
-                    mainHandler.post {
-                        active.listener.onComplete(active.requestId, finalText)
-                    }
+                    mainHandler.post { active.listener.onComplete(active.requestId, finalText) }
                 }
             }
         }
@@ -242,40 +205,88 @@ class AntigravityRuntime(
     }
 }
 
+internal object AntigravityEnvironment {
+    private const val HOME_DIR = "agy-home"
+    private const val TOKEN_RELATIVE_PATH = ".gemini/antigravity-cli/antigravity-oauth-token"
+
+    fun prepareHome(context: Context): File {
+        val home = File(context.noBackupFilesDir, HOME_DIR).apply { mkdirs() }
+        val settingsDir = File(home, ".gemini/antigravity-cli").apply { mkdirs() }
+        val settingsFile = File(settingsDir, "settings.json")
+
+        val settings = try {
+            if (settingsFile.isFile) JSONObject(settingsFile.readText()) else JSONObject()
+        } catch (_: Throwable) {
+            JSONObject()
+        }
+        // Standard account OAuth must not inherit the Gemini API-key provider switch.
+        settings.remove("modelProvider")
+        // SSH OAuth is easier to machine-drive in inline rendering mode.
+        settings.put("altScreenMode", "never")
+        settingsFile.writeText(settings.toString())
+        return home
+    }
+
+    fun tokenFile(context: Context): File = File(prepareHome(context), TOKEN_RELATIVE_PATH)
+
+    fun hasPersistedOAuthToken(context: Context): Boolean {
+        val file = tokenFile(context)
+        if (!file.isFile || file.length() == 0L) return false
+        return try {
+            val root = JSONObject(file.readText())
+            root.optJSONObject("token")?.optString("refresh_token").orEmpty().isNotBlank()
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun baseEnvironment(context: Context, home: File = prepareHome(context)): Map<String, String> = mapOf(
+        "HOME" to home.absolutePath,
+        "TMPDIR" to context.cacheDir.absolutePath,
+        "GODEBUG" to "netdns=cgo",
+        // Antigravity's container/headless-compatible OAuth store avoids a Linux Secret Service
+        // dependency inside the Android APK. The token file stays inside noBackupFilesDir.
+        "GEMINI_FORCE_FILE_STORAGE" to "true",
+    )
+}
+
 internal data class NativeRuntimeSpec(
-    val command: List<String>,
-    val environment: Map<String, String> = emptyMap(),
+    val loader: File,
+    val engine: File,
+    val nativeDir: File,
 ) {
+    fun headlessCommand(): List<String> = baseCommand() + listOf(
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--sandbox",
+        "--print-timeout",
+        "5m",
+    )
+
+    fun interactiveCommand(): List<String> = baseCommand()
+
+    private fun baseCommand(): List<String> = listOf(
+        loader.absolutePath,
+        "--library-path",
+        nativeDir.absolutePath,
+        engine.absolutePath,
+    )
+
     companion object {
         fun resolve(context: Context): NativeRuntimeSpec {
             val nativeDir = File(context.applicationInfo.nativeLibraryDir)
             val loader = File(nativeDir, "libgecis_ld.so")
             val engine = File(nativeDir, "libgecis_agy.so")
-
             if (!loader.isFile || !engine.isFile) {
                 throw RuntimeUnavailableException(
                     "Antigravity native payload 尚未打包。缺少 libgecis_ld.so 或 libgecis_agy.so",
                 )
             }
-
-            return NativeRuntimeSpec(
-                command = listOf(
-                    loader.absolutePath,
-                    "--library-path",
-                    nativeDir.absolutePath,
-                    engine.absolutePath,
-                    "--input-format",
-                    "stream-json",
-                    "--output-format",
-                    "stream-json",
-                    "--sandbox",
-                    "--print-timeout",
-                    "5m",
-                ),
-            )
+            return NativeRuntimeSpec(loader, engine, nativeDir)
         }
     }
 }
 
 internal class RuntimeUnavailableException(message: String) : IllegalStateException(message)
-internal class AuthenticationRequiredException(message: String) : IllegalStateException(message)

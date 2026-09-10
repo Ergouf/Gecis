@@ -7,6 +7,7 @@ on:
       - 'app/**'
       - 'build.gradle.kts'
       - 'settings.gradle.kts'
+      - 'gradle.properties'
       - '.github/workflows/runtime-probe.yml'
   workflow_dispatch:
 
@@ -52,6 +53,7 @@ jobs:
           name: runtime-probe
           path: |
             native/.probe/runtime-probe.json
+            native/.probe/oauth-markers.txt
             native/.probe/staged-runtime-manifest.json
             native/.probe/needed-libs.txt
             native/.probe/found-libs.txt

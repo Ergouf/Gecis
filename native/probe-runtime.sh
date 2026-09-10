@@ -183,10 +183,10 @@ report = {
   },
   "oauth": {
     "markers": lines(${AUTH_MARKERS@Q}),
-    "force_file_storage": ${OAUTH_FORCE_FILE_STORAGE},
-    "antigravity_token_file": ${OAUTH_ANTIGRAVITY_TOKEN_FILE},
-    "jetski_token_file": ${OAUTH_JETSKI_TOKEN_FILE},
-    "environment_token": ${OAUTH_ENV_TOKEN},
+    "force_file_storage": ${OAUTH_FORCE_FILE_STORAGE@Q} == "true",
+    "antigravity_token_file": ${OAUTH_ANTIGRAVITY_TOKEN_FILE@Q} == "true",
+    "jetski_token_file": ${OAUTH_JETSKI_TOKEN_FILE@Q} == "true",
+    "environment_token": ${OAUTH_ENV_TOKEN@Q} == "true",
   },
   "glibc": {
     "version": ${GLIBC_VERSION@Q},

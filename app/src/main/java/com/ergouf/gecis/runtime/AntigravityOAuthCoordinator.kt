@@ -68,6 +68,10 @@ class AntigravityOAuthCoordinator(private val context: Context) : AutoCloseable 
                     put("SSH_CONNECTION", "127.0.0.1 1 127.0.0.1 2")
                     put("TERM", "xterm-256color")
                     put("NO_COLOR", "1")
+                    // Antigravity has historically hard-wrapped long OAuth URLs to terminal width.
+                    // A very wide logical terminal keeps the browser URL intact when output is piped.
+                    put("COLUMNS", "4096")
+                    put("LINES", "80")
                 }
 
                 val owner = builder.start()

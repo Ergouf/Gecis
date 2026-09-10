@@ -44,8 +44,6 @@ INTERP="$(readelf -l "$ENGINE" | sed -n 's/.*Requesting program interpreter: \(.
 [[ "$MACHINE" == "AArch64" ]] || { echo "unexpected engine machine: $MACHINE" >&2; exit 3; }
 [[ "$CLASS" == "ELF64" ]] || { echo "unexpected engine class: $CLASS" >&2; exit 3; }
 
-# Resolve the current aarch64 glibc package from the official Termux glibc repo.
-# This stage is a probe only; the final release pipeline must pin the exact .deb checksum.
 echo "[3/6] Resolving Termux glibc ${GLIBC_VERSION_PREFIX} package"
 CANDIDATE_PATHS=(
   "dists/glibc/stable/binary-aarch64/Packages"
@@ -79,12 +77,10 @@ for block in packages:
 if not rows:
     raise SystemExit('glibc package not found')
 row = rows[-1]
-required = ['Filename','SHA256','Version']
-for key in required:
+for key in ['Filename','SHA256','Version']:
     if key not in row:
         raise SystemExit(f'missing {key} in Packages index')
-out = Path(sys.argv[3])
-out.write_text('\n'.join([
+Path(sys.argv[3]).write_text('\n'.join([
     f"GLIBC_FILENAME={row['Filename']}",
     f"GLIBC_SHA256={row['SHA256']}",
     f"GLIBC_VERSION={row['Version']}",
@@ -101,27 +97,53 @@ dpkg-deb -x "$GLIBC_DEB" "$GLIBC_ROOT"
 LOADER="$(find "$GLIBC_ROOT" -type f \( -name 'ld-linux-aarch64.so.1' -o -name 'ld-*.so' \) -print -quit)"
 [[ -n "$LOADER" ]] || { echo "glibc loader not found in package" >&2; exit 5; }
 
-echo "[5/6] Computing direct DT_NEEDED closure"
-mapfile -t NEEDED < <(readelf -d "$ENGINE" | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p' | sort -u)
-MISSING=()
-FOUND=()
-for lib in "${NEEDED[@]}"; do
-  [[ -n "$lib" ]] || continue
-  path="$(find "$GLIBC_ROOT" \( -type f -o -type l \) -name "$lib" -print -quit)"
-  if [[ -n "$path" ]]; then
-    FOUND+=("$lib")
-  else
-    MISSING+=("$lib")
-  fi
-done
+echo "[5/6] Computing transitive DT_NEEDED closure"
+python3 - "$ENGINE" "$GLIBC_ROOT" "$OUT_DIR" <<'PY'
+import re, subprocess, sys
+from pathlib import Path
+engine = Path(sys.argv[1])
+root = Path(sys.argv[2])
+out = Path(sys.argv[3])
+pat = re.compile(r'Shared library: \[(.+?)\]')
 
-write_lines "$OUT_DIR/needed-libs.txt" "${NEEDED[@]}"
-write_lines "$OUT_DIR/found-libs.txt" "${FOUND[@]}"
-write_lines "$OUT_DIR/missing-libs.txt" "${MISSING[@]}"
+def needed(path):
+    try:
+        text = subprocess.check_output(['readelf','-d',str(path)], text=True, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        return []
+    return sorted({m.group(1) for m in map(pat.search, text.splitlines()) if m})
+
+index = {}
+for p in root.rglob('*'):
+    if p.is_file() or p.is_symlink():
+        index.setdefault(p.name, p)
+
+queue = list(needed(engine))
+seen = set()
+found = {}
+missing = set()
+while queue:
+    lib = queue.pop(0)
+    if not lib or lib in seen:
+        continue
+    seen.add(lib)
+    path = index.get(lib)
+    if not path:
+        missing.add(lib)
+        continue
+    found[lib] = path
+    for dep in needed(path.resolve()):
+        if dep not in seen:
+            queue.append(dep)
+
+(out / 'needed-libs.txt').write_text(''.join(f'{x}\n' for x in sorted(seen)))
+(out / 'found-libs.txt').write_text(''.join(f'{x}\n' for x in sorted(found)))
+(out / 'missing-libs.txt').write_text(''.join(f'{x}\n' for x in sorted(missing)))
+(out / 'closure-paths.txt').write_text(''.join(f'{name}\t{path}\n' for name, path in sorted(found.items())))
+PY
 
 ENGINE_SHA256="$(sha256sum "$ENGINE" | awk '{print $1}')"
 LOADER_SHA256="$(sha256sum "$LOADER" | awk '{print $1}')"
-
 python3 - "$REPORT" <<PY
 import json
 from pathlib import Path
@@ -144,17 +166,16 @@ report = {
     "loader_sha256": ${LOADER_SHA256@Q},
     "packages_index": ${PACKAGES_URL@Q},
   },
-  "direct_needed": lines(${OUT_DIR@Q} + "/needed-libs.txt"),
-  "found_needed": lines(${OUT_DIR@Q} + "/found-libs.txt"),
-  "missing_needed": lines(${OUT_DIR@Q} + "/missing-libs.txt"),
+  "closure_needed": lines(${OUT_DIR@Q} + "/needed-libs.txt"),
+  "closure_found": lines(${OUT_DIR@Q} + "/found-libs.txt"),
+  "closure_missing": lines(${OUT_DIR@Q} + "/missing-libs.txt"),
 }
 Path(${REPORT@Q}).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
 PY
 
 cat "$REPORT"
-
 if [[ -s "$OUT_DIR/missing-libs.txt" ]]; then
-  echo "[FAIL] direct dependency closure is incomplete" >&2
+  echo "[FAIL] transitive dependency closure is incomplete" >&2
   exit 6
 fi
 

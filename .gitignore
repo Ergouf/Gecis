@@ -1,0 +1,17 @@
+.gradle/
+.idea/
+local.properties
+**/build/
+*.iml
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# Local knowledge databases are never committed.
+*.db
+*.db-shm
+*.db-wal
+
+# Native payloads are produced by the verified runtime build pipeline.
+app/src/main/jniLibs/**/libgecis_*.so

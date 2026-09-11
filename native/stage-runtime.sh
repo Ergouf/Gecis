@@ -14,6 +14,7 @@ GLIBC_ROOT="$PROBE_DIR/glibc-root"
 STAGED_MANIFEST="$PROBE_DIR/staged-runtime-manifest.json"
 CA_BUNDLE="$RUNTIME_ASSET_DIR/cacert.pem"
 LIB_MAP="$RUNTIME_ASSET_DIR/native-libs.map"
+NETWORK_PATCH_REPORT="$PROBE_DIR/resolver-patch.txt"
 
 for cmd in readelf sha256sum python3 curl; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "missing required tool: $cmd" >&2; exit 2; }
@@ -36,9 +37,9 @@ chmod 0755 "$JNI_DIR/libgecis_agy.so" "$JNI_DIR/libgecis_ld.so"
 # Android packaging expects native payload file names that look like lib*.so. Do not mutate
 # DT_NEEDED inside glibc/Antigravity to achieve that: real-device testing showed the rewritten
 # dynamic string table could yield corrupted dependency names and loader crashes. Instead keep
-# every ELF byte-for-byte (except the resolver pathname patch below), store it under an Android-
-# safe file name, and generate a map. Kotlin recreates the original soname names as symlinks in a
-# private runtime directory before invoking the glibc loader.
+# every ELF byte-for-byte (except the fixed Termux network-config paths below), store it under an
+# Android-safe file name, and generate a map. Kotlin recreates the original soname names as
+# symlinks in a private runtime directory before invoking the glibc loader.
 : > "$LIB_MAP"
 declare -A SAFE_NAME=()
 while IFS= read -r lib; do
@@ -52,41 +53,59 @@ while IFS= read -r lib; do
   printf '%s\t%s\n' "$lib" "$safe" >> "$LIB_MAP"
 done < "$PROBE_DIR/found-libs.txt"
 
-# Termux glibc is compiled with a Termux-specific resolver path. Gecis cannot write there, and
-# the absolute Android app-data path varies across devices. Rewrite only that NUL-terminated path
-# in staged libc to relative "resolv.conf"; do not alter ELF dynamic metadata.
+# Termux glibc is compiled with Termux-specific absolute paths for resolver/NSS files. A standalone
+# APK cannot populate those paths. Patch only NUL-terminated path strings to short relative names;
+# ProcessBuilder runs Antigravity from noBackupFilesDir, where Kotlin writes resolv.conf, hosts and
+# nsswitch.conf. This leaves ELF headers, dynamic strings and DT_NEEDED untouched.
 STAGED_LIBC="$JNI_DIR/${SAFE_NAME[libc.so.6]:-}"
 [[ -f "$STAGED_LIBC" ]] || { echo "staged libc.so.6 alias missing" >&2; exit 5; }
-python3 - "$STAGED_LIBC" "$PROBE_DIR/resolver-patch.txt" <<'PY'
+python3 - "$STAGED_LIBC" "$NETWORK_PATCH_REPORT" <<'PY'
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
 report = Path(sys.argv[2])
 data = bytearray(path.read_bytes())
-replacement = b"resolv.conf"
+original = bytes(data)
+
+targets = {
+    b"/resolv.conf": b"resolv.conf",
+    b"/hosts": b"hosts",
+    b"/nsswitch.conf": b"nsswitch.conf",
+}
 changes = []
+counts = {suffix: 0 for suffix in targets}
 
 cursor = 0
-original = bytes(data)
 for chunk in original.split(b"\0"):
     pos = original.find(chunk, cursor)
     cursor = pos + len(chunk) + 1
-    if not chunk.endswith(b"/resolv.conf"):
+    if pos < 0 or not chunk:
         continue
-    if len(chunk) < len(replacement):
-        raise SystemExit(f"resolver path too short to rewrite safely: {chunk!r}")
-    data[pos:pos + len(chunk)] = replacement + (b"\0" * (len(chunk) - len(replacement)))
-    changes.append(chunk.decode("utf-8", errors="replace"))
+    for suffix, replacement in targets.items():
+        if not chunk.endswith(suffix):
+            continue
+        if len(chunk) < len(replacement):
+            raise SystemExit(f"network config path too short to rewrite safely: {chunk!r}")
+        data[pos:pos + len(chunk)] = replacement + (b"\0" * (len(chunk) - len(replacement)))
+        changes.append((chunk.decode("utf-8", errors="replace"), replacement.decode()))
+        counts[suffix] += 1
+        break
 
-if not changes:
-    raise SystemExit("no absolute resolv.conf path found in staged libc; refusing an unverified DNS runtime")
+if counts[b"/resolv.conf"] == 0:
+    raise SystemExit("no absolute resolv.conf path found in staged libc")
+if counts[b"/hosts"] == 0:
+    raise SystemExit("no absolute hosts path found in staged libc; localhost would be unresolved")
 
 path.write_bytes(data)
-report.write_text("\n".join(changes) + "\n")
-print("Patched glibc resolver path(s):")
-for value in changes:
-    print(f"  {value} -> resolv.conf")
+for replacement in (b"resolv.conf", b"hosts"):
+    if replacement not in path.read_bytes():
+        raise SystemExit(f"network config rewrite verification failed for {replacement!r}")
+
+report.write_text("".join(f"{old} -> {new}\n" for old, new in changes))
+print("Patched glibc network config path(s):")
+for old, new in changes:
+    print(f"  {old} -> {new}")
 PY
 
 # Verify that every DT_NEEDED entry in the staged payload is resolvable through the generated
@@ -137,14 +156,14 @@ echo "Bundling pinned CA roots ${CA_BUNDLE_DATE}"
 curl -fL --retry 3 --retry-delay 2 "$CA_URL" -o "$CA_BUNDLE"
 echo "${CA_BUNDLE_SHA256}  ${CA_BUNDLE}" | sha256sum -c -
 
-python3 - "$STAGED_MANIFEST" "$REPORT" "$JNI_DIR" "$CA_BUNDLE" "$PROBE_DIR/resolver-patch.txt" "$LIB_MAP" <<'PY'
+python3 - "$STAGED_MANIFEST" "$REPORT" "$JNI_DIR" "$CA_BUNDLE" "$NETWORK_PATCH_REPORT" "$LIB_MAP" <<'PY'
 import hashlib, json, subprocess, sys
 from pathlib import Path
 manifest_path = Path(sys.argv[1])
 report_path = Path(sys.argv[2])
 root_path = Path(sys.argv[3])
 ca_path = Path(sys.argv[4])
-resolver_report = Path(sys.argv[5])
+network_report = Path(sys.argv[5])
 map_path = Path(sys.argv[6])
 report = json.loads(report_path.read_text())
 files = {}
@@ -175,7 +194,7 @@ manifest = {
     'source': report,
     'files': files,
     'runtime_library_map': lib_map,
-    'resolver_paths_rewritten': [x for x in resolver_report.read_text().splitlines() if x],
+    'network_config_paths_rewritten': [x for x in network_report.read_text().splitlines() if x],
     'ca_bundle': {
         'sha256': hashlib.sha256(ca_path.read_bytes()).hexdigest(),
         'size': ca_path.stat().st_size,

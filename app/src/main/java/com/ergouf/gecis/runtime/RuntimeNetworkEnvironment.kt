@@ -18,11 +18,15 @@ import java.net.InetAddress
  */
 internal object RuntimeNetworkEnvironment {
     private const val RESOLV_CONF = "resolv.conf"
+    private const val HOSTS_FILE = "hosts"
+    private const val NSSWITCH_CONF = "nsswitch.conf"
     private const val CA_BUNDLE = "cacert.pem"
     private const val CA_ASSET = "runtime/cacert.pem"
 
     data class Prepared(
         val resolvConf: File,
+        val hostsFile: File,
+        val nsswitchConf: File,
         val caBundle: File,
         val proxyEnvironment: Map<String, String>,
         val summary: String,
@@ -31,6 +35,8 @@ internal object RuntimeNetworkEnvironment {
     fun prepare(context: Context): Prepared {
         val root = context.noBackupFilesDir
         val resolvConf = File(root, RESOLV_CONF)
+        val hostsFile = File(root, HOSTS_FILE)
+        val nsswitchConf = File(root, NSSWITCH_CONF)
         val caBundle = File(root, CA_BUNDLE)
         val manager = context.getSystemService(ConnectivityManager::class.java)
             ?: throw IllegalStateException("无法读取 Android 网络配置")
@@ -53,6 +59,8 @@ internal object RuntimeNetworkEnvironment {
         }
 
         writeDns(dnsServers, resolvConf)
+        writeHosts(hostsFile)
+        writeNsswitch(nsswitchConf)
         copyPinnedCaBundle(context, caBundle)
 
         val proxy = activeLinkProperties?.httpProxy
@@ -66,6 +74,8 @@ internal object RuntimeNetworkEnvironment {
 
         return Prepared(
             resolvConf = resolvConf,
+            hostsFile = hostsFile,
+            nsswitchConf = nsswitchConf,
             caBundle = caBundle,
             proxyEnvironment = proxyEnvironment,
             summary = summary,
@@ -81,6 +91,22 @@ internal object RuntimeNetworkEnvironment {
             append("options timeout:2 attempts:2\n")
         }
         destination.writeText(text)
+    }
+
+    private fun writeHosts(destination: File) {
+        destination.writeText(
+            "127.0.0.1 localhost localhost.localdomain\n" +
+                "::1 localhost localhost.localdomain ip6-localhost ip6-loopback\n",
+        )
+    }
+
+    private fun writeNsswitch(destination: File) {
+        // Resolve loopback/local aliases from the projected hosts file first, then use DNS for
+        // remote names. This is the minimal glibc NSS surface Antigravity needs on Android.
+        destination.writeText(
+            "hosts: files dns\n" +
+                "networks: files dns\n",
+        )
     }
 
     private fun buildProxyEnvironment(proxy: ProxyInfo?): Map<String, String> {

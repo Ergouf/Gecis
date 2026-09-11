@@ -104,3 +104,14 @@ jobs:
           else
             gh release create "$TAG_NAME" "$asset" --generate-notes "${prerelease_args[@]}"
           fi
+
+          # Always publish: leftover draft releases (e.g. after tag deletion)
+          # make `gh release view` succeed and previously only got an upload,
+          # leaving the APK invisible on the public Releases page.
+          edit_args=(--draft=false)
+          if [[ "$TAG_NAME" == *-* ]]; then
+            edit_args+=(--prerelease)
+          else
+            edit_args+=(--latest)
+          fi
+          gh release edit "$TAG_NAME" "${edit_args[@]}"

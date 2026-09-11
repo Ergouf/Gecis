@@ -23,6 +23,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
 import com.ergouf.gecis.auth.OAuthTokenVault
+import com.ergouf.gecis.history.ChatHistoryStore
 import com.ergouf.gecis.knowledge.FenbiKnowledgeBase
 import com.ergouf.gecis.runtime.AntigravityOAuthCoordinator
 import com.ergouf.gecis.runtime.AntigravityRuntime
@@ -38,11 +39,14 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private lateinit var oauth: AntigravityOAuthCoordinator
     private lateinit var tokenVault: OAuthTokenVault
     private lateinit var knowledgeBase: FenbiKnowledgeBase
+    private lateinit var historyStore: ChatHistoryStore
     private val importWorker = Executors.newSingleThreadExecutor()
 
     private var pendingAfterDatabase: PendingMessage? = null
     private var pendingAfterAuth: PendingMessage? = null
     private var inflight: PendingMessage? = null
+    private var currentConversationId: Long? = null
+    private var currentProjectId: Long? = null
     private var lastInsets = Insets.NONE
     private var lastImeBottom = 0
 
@@ -95,6 +99,8 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         super.onCreate(savedInstanceState)
         tokenVault = OAuthTokenVault(applicationContext)
         knowledgeBase = FenbiKnowledgeBase(applicationContext)
+        historyStore = ChatHistoryStore(applicationContext)
+        currentProjectId = historyStore.ensureDefaultProject()
         runtime = KnowledgeAugmentingRuntime(
             AntigravityRuntime(applicationContext, tokenVault),
             knowledgeBase,
@@ -143,6 +149,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                 override fun onPageFinished(view: WebView, url: String) {
                     super.onPageFinished(view, url)
                     emitInsets()
+                    emitHistory()
                 }
             }
             addJavascriptInterface(GecisBridge(), "GecisNative")
@@ -177,6 +184,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         oauth.close()
         runtime.close()
         importWorker.shutdownNow()
+        historyStore.close()
         webView.removeJavascriptInterface("GecisNative")
         webView.destroy()
         super.onDestroy()
@@ -185,21 +193,57 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     inner class GecisBridge {
         @JavascriptInterface
         fun sendMessage(requestId: String, text: String) {
-            val message = PendingMessage(requestId, text)
-            runOnUiThread { handleSubmittedMessage(message) }
+            runOnUiThread {
+                if (pendingAfterDatabase != null || pendingAfterAuth != null || inflight != null) return@runOnUiThread
+                val conversationId = currentConversationId?.takeIf(historyStore::conversationExists)
+                    ?: historyStore.createConversation(currentProjectId).also { currentConversationId = it }
+                historyStore.appendMessage(conversationId, "user", text)
+                emitHistory()
+                handleSubmittedMessage(PendingMessage(requestId, text, conversationId))
+            }
+        }
+
+        @JavascriptInterface
+        fun getHistory(): String = historyStore.snapshot(currentConversationId)
+
+        @JavascriptInterface
+        fun createProject(name: String): String {
+            val projectId = historyStore.createProject(name)
+            currentProjectId = projectId
+            currentConversationId = null
+            return historyStore.snapshot(currentConversationId)
+        }
+
+        @JavascriptInterface
+        fun newConversation(projectId: Long): String {
+            require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) {
+                "当前消息尚未完成"
+            }
+            val resolvedProject = projectId.takeIf(historyStore::projectExists)
+                ?: historyStore.ensureDefaultProject()
+            currentProjectId = resolvedProject
+            currentConversationId = historyStore.createConversation(resolvedProject)
+            return historyStore.snapshot(currentConversationId)
+        }
+
+        @JavascriptInterface
+        fun openConversation(conversationId: Long): String {
+            require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) {
+                "当前消息尚未完成"
+            }
+            require(historyStore.conversationExists(conversationId)) { "历史会话不存在" }
+            currentConversationId = conversationId
+            return historyStore.snapshot(currentConversationId)
         }
     }
 
     private fun handleSubmittedMessage(message: PendingMessage) {
-        if (pendingAfterDatabase != null || pendingAfterAuth != null || inflight != null) return
-
         if (!knowledgeBase.hasDatabase()) {
             pendingAfterDatabase = message
             emitStatus("请选择 fenbi.db", "working")
             openFenbiDatabase.launch(arrayOf("*/*"))
             return
         }
-
         continueMessage(message)
     }
 
@@ -273,7 +317,12 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     }
 
     override fun onComplete(requestId: String, text: String) {
-        if (inflight?.requestId == requestId) inflight = null
+        val completed = inflight?.takeIf { it.requestId == requestId }
+        if (completed != null) {
+            inflight = null
+            historyStore.appendMessage(completed.conversationId, "assistant", text)
+            emitHistory()
+        }
         emitStatus("已就绪", "idle")
         emit("complete", requestId, text)
     }
@@ -318,13 +367,26 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         }
     }
 
+    private fun emitHistory() {
+        if (!::webView.isInitialized) return
+        runOnUiThread {
+            val snapshot = historyStore.snapshot(currentConversationId)
+            webView.evaluateJavascript(
+                "window.GecisChat && window.GecisChat.onHistory($snapshot);",
+                null,
+            )
+        }
+    }
+
     private fun emitInsets() {
         if (!::webView.isInitialized) return
-        val top = lastInsets.top
-        val right = lastInsets.right
-        val bottom = lastInsets.bottom
-        val left = lastInsets.left
-        val imeBottom = lastImeBottom
+        val density = resources.displayMetrics.density.coerceAtLeast(1f)
+        fun cssPx(value: Int): Int = (value / density).toInt()
+        val top = cssPx(lastInsets.top)
+        val right = cssPx(lastInsets.right)
+        val bottom = cssPx(lastInsets.bottom)
+        val left = cssPx(lastInsets.left)
+        val imeBottom = cssPx(lastImeBottom)
         val script = """
             (() => {
               const root = document.documentElement;
@@ -342,10 +404,10 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                   html, body, .app { min-height: 100%; }
                   body { padding: 0; }
                   header {
-                    height: calc(58px + var(--android-safe-top, 0px));
+                    height: calc(54px + var(--android-safe-top, 0px));
                     padding-top: var(--android-safe-top, 0px);
-                    padding-left: calc(18px + var(--android-safe-left, 0px));
-                    padding-right: calc(18px + var(--android-safe-right, 0px));
+                    padding-left: calc(14px + var(--android-safe-left, 0px));
+                    padding-right: calc(14px + var(--android-safe-right, 0px));
                   }
                   main {
                     padding-left: calc(18px + var(--android-safe-left, 0px));
@@ -398,7 +460,11 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         ByteArrayInputStream(ByteArray(0)),
     )
 
-    private data class PendingMessage(val requestId: String, val text: String)
+    private data class PendingMessage(
+        val requestId: String,
+        val text: String,
+        val conversationId: Long,
+    )
 
     companion object {
         private const val APP_HOST = "appassets.androidplatform.net"

@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private lateinit var knowledgeBase: FenbiKnowledgeBase
     private lateinit var historyStore: ChatHistoryStore
     private val importWorker = Executors.newSingleThreadExecutor()
+    private val historyWorker = Executors.newSingleThreadExecutor()
 
     private var pendingAfterDatabase: PendingMessage? = null
     private var pendingAfterAuth: PendingMessage? = null
@@ -51,12 +52,20 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private var lastImeBottom = 0
 
     private val openFenbiDatabase = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        val pending = pendingAfterDatabase ?: return@registerForActivityResult
+        handleFenbiDatabasePicked(uri)
+    }
+
+    private val fallbackFenbiDatabase = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        handleFenbiDatabasePicked(result.data?.data)
+    }
+
+    private fun handleFenbiDatabasePicked(uri: Uri?) {
+        val pending = pendingAfterDatabase ?: return
         if (uri == null) {
             pendingAfterDatabase = null
             emitStatus("未选择 fenbi.db", "error")
             onError(pending.requestId, "未选择 fenbi.db")
-            return@registerForActivityResult
+            return
         }
 
         val displayName = knowledgeBase.importedDisplayName(uri) ?: "fenbi.db"
@@ -75,7 +84,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                     if (pendingAfterDatabase?.requestId != pending.requestId) return@runOnUiThread
                     pendingAfterDatabase = null
                     emitStatus("$displayName 导入成功", "success")
-                    continueMessage(pending)
+                    persistUserMessageThenContinue(pending)
                 }
             } catch (error: Throwable) {
                 runOnUiThread {
@@ -100,7 +109,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         tokenVault = OAuthTokenVault(applicationContext)
         knowledgeBase = FenbiKnowledgeBase(applicationContext)
         historyStore = ChatHistoryStore(applicationContext)
-        currentProjectId = historyStore.ensureDefaultProject()
+        currentProjectId = runCatching { historyStore.ensureDefaultProject() }.getOrNull()
         runtime = KnowledgeAugmentingRuntime(
             AntigravityRuntime(applicationContext, tokenVault),
             knowledgeBase,
@@ -184,7 +193,8 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         oauth.close()
         runtime.close()
         importWorker.shutdownNow()
-        historyStore.close()
+        historyWorker.shutdownNow()
+        runCatching { historyStore.close() }
         webView.removeJavascriptInterface("GecisNative")
         webView.destroy()
         super.onDestroy()
@@ -194,28 +204,32 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         @JavascriptInterface
         fun sendMessage(requestId: String, text: String) {
             runOnUiThread {
-                if (pendingAfterDatabase != null || pendingAfterAuth != null || inflight != null) return@runOnUiThread
-                val conversationId = currentConversationId?.takeIf(historyStore::conversationExists)
-                    ?: historyStore.createConversation(currentProjectId).also { currentConversationId = it }
-                historyStore.appendMessage(conversationId, "user", text)
-                emitHistory()
-                handleSubmittedMessage(PendingMessage(requestId, text, conversationId))
+                try {
+                    if (pendingAfterDatabase != null || pendingAfterAuth != null || inflight != null) {
+                        return@runOnUiThread
+                    }
+                    handleSubmittedMessage(PendingMessage(requestId, text, null))
+                } catch (error: Throwable) {
+                    onError(requestId, "准备对话失败：${error.message ?: error.javaClass.simpleName}")
+                }
             }
         }
 
         @JavascriptInterface
-        fun getHistory(): String = historyStore.snapshot(currentConversationId)
+        fun getHistory(): String = runCatching {
+            historyStore.snapshot(currentConversationId)
+        }.getOrElse { historyErrorSnapshot(it) }
 
         @JavascriptInterface
-        fun createProject(name: String): String {
+        fun createProject(name: String): String = runCatching {
             val projectId = historyStore.createProject(name)
             currentProjectId = projectId
             currentConversationId = null
-            return historyStore.snapshot(currentConversationId)
-        }
+            historyStore.snapshot(currentConversationId)
+        }.getOrElse { historyErrorSnapshot(it) }
 
         @JavascriptInterface
-        fun newConversation(projectId: Long): String {
+        fun newConversation(projectId: Long): String = runCatching {
             require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) {
                 "当前消息尚未完成"
             }
@@ -223,28 +237,81 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                 ?: historyStore.ensureDefaultProject()
             currentProjectId = resolvedProject
             currentConversationId = historyStore.createConversation(resolvedProject)
-            return historyStore.snapshot(currentConversationId)
-        }
+            historyStore.snapshot(currentConversationId)
+        }.getOrElse { historyErrorSnapshot(it) }
 
         @JavascriptInterface
-        fun openConversation(conversationId: Long): String {
+        fun openConversation(conversationId: Long): String = runCatching {
             require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) {
                 "当前消息尚未完成"
             }
             require(historyStore.conversationExists(conversationId)) { "历史会话不存在" }
             currentConversationId = conversationId
-            return historyStore.snapshot(currentConversationId)
-        }
+            historyStore.snapshot(currentConversationId)
+        }.getOrElse { historyErrorSnapshot(it) }
     }
 
     private fun handleSubmittedMessage(message: PendingMessage) {
         if (!knowledgeBase.hasDatabase()) {
             pendingAfterDatabase = message
             emitStatus("请选择 fenbi.db", "working")
-            openFenbiDatabase.launch(arrayOf("*/*"))
+            launchFenbiPicker(message)
             return
         }
-        continueMessage(message)
+        persistUserMessageThenContinue(message)
+    }
+
+    private fun launchFenbiPicker(message: PendingMessage) {
+        try {
+            openFenbiDatabase.launch(arrayOf("*/*"))
+        } catch (primary: Throwable) {
+            try {
+                val intent = Intent(Intent.ACTION_GET_CONTENT)
+                    .addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType("*/*")
+                fallbackFenbiDatabase.launch(intent)
+            } catch (fallback: Throwable) {
+                pendingAfterDatabase = null
+                val reason = fallback.message ?: primary.message ?: "系统文件选择器不可用"
+                emitStatus("无法打开文件选择器", "error")
+                onError(message.requestId, "无法打开系统文件选择器：$reason")
+            }
+        }
+    }
+
+    private fun persistUserMessageThenContinue(message: PendingMessage) {
+        val requestedConversation = currentConversationId
+        val requestedProject = currentProjectId
+        emitStatus("正在准备对话…", "working")
+        historyWorker.execute {
+            val conversationId = runCatching {
+                requestedConversation?.takeIf(historyStore::conversationExists)
+                    ?: historyStore.createConversation(requestedProject)
+            }.getOrNull()
+
+            val historyError = if (conversationId != null) {
+                runCatching {
+                    historyStore.appendMessage(conversationId, "user", message.text)
+                }.exceptionOrNull()
+            } else {
+                IllegalStateException("无法创建本地历史会话")
+            }
+
+            runOnUiThread {
+                if (conversationId != null) {
+                    currentConversationId = conversationId
+                    currentProjectId = runCatching {
+                        val snapshot = JSONObject(historyStore.snapshot(conversationId))
+                        snapshot.optLong("currentProjectId").takeIf { it > 0L }
+                    }.getOrNull() ?: currentProjectId
+                }
+                if (historyError != null) {
+                    emitStatus("历史记录暂未保存，继续对话", "error")
+                }
+                emitHistory()
+                continueMessage(message.copy(conversationId = conversationId))
+            }
+        }
     }
 
     private fun continueMessage(message: PendingMessage) {
@@ -318,13 +385,21 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
     override fun onComplete(requestId: String, text: String) {
         val completed = inflight?.takeIf { it.requestId == requestId }
-        if (completed != null) {
-            inflight = null
-            historyStore.appendMessage(completed.conversationId, "assistant", text)
-            emitHistory()
-        }
+        if (completed != null) inflight = null
         emitStatus("已就绪", "idle")
         emit("complete", requestId, text)
+
+        val conversationId = completed?.conversationId ?: return
+        historyWorker.execute {
+            val error = runCatching {
+                historyStore.appendMessage(conversationId, "assistant", text)
+            }.exceptionOrNull()
+            if (error == null) {
+                emitHistory()
+            } else {
+                emitStatus("回答完成，但历史记录保存失败", "error")
+            }
+        }
     }
 
     override fun onError(requestId: String, message: String) {
@@ -356,6 +431,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
     private fun emitStatus(text: String, state: String) {
         runOnUiThread {
+            if (!::webView.isInitialized) return@runOnUiThread
             val payload = JSONObject()
                 .put("text", text)
                 .put("state", state)
@@ -368,15 +444,28 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     }
 
     private fun emitHistory() {
-        if (!::webView.isInitialized) return
-        runOnUiThread {
-            val snapshot = historyStore.snapshot(currentConversationId)
-            webView.evaluateJavascript(
-                "window.GecisChat && window.GecisChat.onHistory($snapshot);",
-                null,
-            )
+        if (!::webView.isInitialized || historyWorker.isShutdown) return
+        historyWorker.execute {
+            val snapshot = runCatching {
+                historyStore.snapshot(currentConversationId)
+            }.getOrElse { historyErrorSnapshot(it) }
+            runOnUiThread {
+                if (!::webView.isInitialized) return@runOnUiThread
+                webView.evaluateJavascript(
+                    "window.GecisChat && window.GecisChat.onHistory($snapshot);",
+                    null,
+                )
+            }
         }
     }
+
+    private fun historyErrorSnapshot(error: Throwable): String = JSONObject()
+        .put("projects", org.json.JSONArray())
+        .put("messages", org.json.JSONArray())
+        .put("currentConversationId", JSONObject.NULL)
+        .put("currentProjectId", JSONObject.NULL)
+        .put("error", error.message ?: "历史记录不可用")
+        .toString()
 
     private fun emitInsets() {
         if (!::webView.isInitialized) return
@@ -463,7 +552,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private data class PendingMessage(
         val requestId: String,
         val text: String,
-        val conversationId: Long,
+        val conversationId: Long?,
     )
 
     companion object {

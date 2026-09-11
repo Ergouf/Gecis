@@ -21,11 +21,6 @@ import javax.net.ssl.HttpsURLConnection
 
 /**
  * Runs Antigravity-compatible Google OAuth natively on Android.
- *
- * The OAuth client is an installed/public client. PKCE and state protect each authorization
- * attempt. Gecis listens only on 127.0.0.1:51121, while the registered redirect URI remains
- * localhost:51121. Token exchange uses Android's HTTPS stack and stores the resulting
- * Antigravity credential wrapper in OAuthTokenVault.
  */
 class AntigravityOAuthCoordinator(
     private val tokenVault: OAuthTokenVault,
@@ -66,10 +61,7 @@ class AntigravityOAuthCoordinator(
 
                 val boundServer = ServerSocket().apply {
                     reuseAddress = true
-                    bind(
-                        InetSocketAddress(InetAddress.getByName("127.0.0.1"), CALLBACK_PORT),
-                        1,
-                    )
+                    bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), CALLBACK_PORT), 1)
                     soTimeout = CALLBACK_TIMEOUT_MS
                 }
                 server = boundServer
@@ -101,10 +93,7 @@ class AntigravityOAuthCoordinator(
                 }
             } finally {
                 synchronized(lock) {
-                    try {
-                        server?.close()
-                    } catch (_: Throwable) {
-                    }
+                    try { server?.close() } catch (_: Throwable) {}
                     if (serverSocket === server) serverSocket = null
                     active = false
                 }
@@ -116,10 +105,7 @@ class AntigravityOAuthCoordinator(
         synchronized(lock) {
             cancelled = true
             listener = null
-            try {
-                serverSocket?.close()
-            } catch (_: Throwable) {
-            }
+            try { serverSocket?.close() } catch (_: Throwable) {}
             serverSocket = null
             active = false
         }
@@ -166,13 +152,10 @@ class AntigravityOAuthCoordinator(
                     throw IllegalStateException("Google 回调缺少授权码")
                 }
 
-                redirectToApp(socket)
+                respondWithReturnPage(socket)
                 return code
             } finally {
-                try {
-                    socket.close()
-                } catch (_: Throwable) {
-                }
+                try { socket.close() } catch (_: Throwable) {}
             }
         }
         throw IllegalStateException("Google 登录已取消")
@@ -209,17 +192,48 @@ class AntigravityOAuthCoordinator(
         output.flush()
     }
 
-    private fun redirectToApp(socket: Socket) {
-        val response = buildString {
-            append("HTTP/1.1 302 Found\r\n")
-            append("Location: $APP_RETURN_URI\r\n")
+    private fun respondWithReturnPage(socket: Socket) {
+        val html = """
+            <!doctype html>
+            <html lang="zh-CN">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width,initial-scale=1">
+              <title>返回 Gecis</title>
+              <style>
+                body{font-family:system-ui,sans-serif;margin:0;min-height:100vh;display:grid;place-items:center;background:#f7f7f5;color:#171717}
+                main{padding:32px;text-align:center}a{display:inline-block;margin-top:18px;padding:12px 18px;border-radius:22px;background:#171717;color:white;text-decoration:none}
+              </style>
+            </head>
+            <body>
+              <main>
+                <h2>Google 授权已完成</h2>
+                <p>正在返回 Gecis…</p>
+                <a href="$APP_RETURN_URI">返回 Gecis</a>
+              </main>
+              <script>
+                const appUri = '$APP_RETURN_URI';
+                const intentUri = '$APP_RETURN_INTENT_URI';
+                setTimeout(() => { window.location.href = intentUri; }, 80);
+                setTimeout(() => { window.location.href = appUri; }, 650);
+              </script>
+            </body>
+            </html>
+        """.trimIndent()
+        val body = html.toByteArray(Charsets.UTF_8)
+        val headers = buildString {
+            append("HTTP/1.1 200 OK\r\n")
+            append("Content-Type: text/html; charset=utf-8\r\n")
             append("Cache-Control: no-store\r\n")
-            append("Content-Length: 0\r\n")
+            append("Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'\r\n")
+            append("Content-Length: ${body.size}\r\n")
             append("Connection: close\r\n\r\n")
         }.toByteArray(Charsets.US_ASCII)
-        val output = socket.getOutputStream()
-        output.write(response)
-        output.flush()
+        socket.getOutputStream().apply {
+            write(headers)
+            write(body)
+            flush()
+        }
     }
 
     private fun exchangeCode(code: String, verifier: String): JSONObject {
@@ -240,14 +254,9 @@ class AntigravityOAuthCoordinator(
             connection.connectTimeout = NETWORK_TIMEOUT_MS
             connection.readTimeout = NETWORK_TIMEOUT_MS
             connection.doOutput = true
-            connection.setRequestProperty(
-                "Content-Type",
-                "application/x-www-form-urlencoded;charset=UTF-8",
-            )
+            connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
             connection.setRequestProperty("Accept", "application/json")
-            connection.outputStream.use { output ->
-                output.write(body.toByteArray(Charsets.UTF_8))
-            }
+            connection.outputStream.use { output -> output.write(body.toByteArray(Charsets.UTF_8)) }
 
             val status = connection.responseCode
             if (status !in 200..299) {
@@ -269,9 +278,7 @@ class AntigravityOAuthCoordinator(
                 .put("expiry", Instant.now().plusSeconds(expiresIn).toString())
             response.optString("scope").takeIf { it.isNotBlank() }?.let { token.put("scope", it) }
 
-            return JSONObject()
-                .put("auth_method", "consumer")
-                .put("token", token)
+            return JSONObject().put("auth_method", "consumer").put("token", token)
         } finally {
             connection.disconnect()
         }
@@ -281,8 +288,7 @@ class AntigravityOAuthCoordinator(
         "${urlEncode(it.key)}=${urlEncode(it.value)}"
     }
 
-    private fun urlEncode(value: String): String =
-        URLEncoder.encode(value, Charsets.UTF_8.name())
+    private fun urlEncode(value: String): String = URLEncoder.encode(value, Charsets.UTF_8.name())
 
     private fun randomBase64Url(bytes: Int): String {
         val data = ByteArray(bytes)
@@ -304,10 +310,10 @@ class AntigravityOAuthCoordinator(
         private const val CALLBACK_PATH = "/oauth-callback"
         private const val REDIRECT_URI = "http://localhost:51121/oauth-callback"
         private const val APP_RETURN_URI = "gecis://oauth-complete"
+        private const val APP_RETURN_INTENT_URI = "intent://oauth-complete#Intent;scheme=gecis;package=com.ergouf.gecis;end"
         private const val AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
         private const val TOKEN_URL = "https://oauth2.googleapis.com/token"
-        private const val CLIENT_ID =
-            "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+        private const val CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
         private const val CLIENT_SECRET_PREFIX = "GOCSPX-"
         private const val CLIENT_SECRET_SUFFIX = "K58FWR486LdLJ1mLB8sXC4z6qDAf"
         private const val CALLBACK_TIMEOUT_MS = 180_000

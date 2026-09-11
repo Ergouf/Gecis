@@ -13,17 +13,12 @@ class ChatHistoryStore(context: Context) : SQLiteOpenHelper(
     null,
     DATABASE_VERSION,
 ) {
-    data class Message(
-        val id: Long,
-        val role: String,
-        val content: String,
-        val createdAt: Long,
-    )
-
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
+        // History access is serialized by MainActivity. WAL adds no benefit here and has shown
+        // device/ROM compatibility issues when enabled from onConfigure, so keep the default
+        // single-file journal mode and only enable foreign-key enforcement.
         db.setForeignKeyConstraintsEnabled(true)
-        db.enableWriteAheadLogging()
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -77,15 +72,13 @@ class ChatHistoryStore(context: Context) : SQLiteOpenHelper(
     fun createProject(rawName: String): Long {
         val name = rawName.trim().take(MAX_PROJECT_NAME)
         require(name.isNotBlank()) { "项目名称不能为空" }
+        val db = writableDatabase
         val now = System.currentTimeMillis()
-        writableDatabase.execSQL(
+        db.execSQL(
             "INSERT INTO projects(name, created_at, updated_at) VALUES(?, ?, ?)",
             arrayOf(name, now, now),
         )
-        return writableDatabase.rawQuery("SELECT last_insert_rowid()", null).use { cursor ->
-            check(cursor.moveToFirst())
-            cursor.getLong(0)
-        }
+        return lastInsertRowId(db)
     }
 
     @Synchronized
@@ -97,17 +90,12 @@ class ChatHistoryStore(context: Context) : SQLiteOpenHelper(
             "INSERT INTO conversations(project_id, title, created_at, updated_at) VALUES(?, ?, ?, ?)",
             arrayOf(resolvedProject, DEFAULT_CONVERSATION_TITLE, now, now),
         )
-        return db.rawQuery("SELECT last_insert_rowid()", null).use { cursor ->
-            check(cursor.moveToFirst())
-            cursor.getLong(0)
-        }
+        return lastInsertRowId(db)
     }
 
     @Synchronized
-    fun conversationExists(conversationId: Long): Boolean = readableDatabase.rawQuery(
-        "SELECT 1 FROM conversations WHERE id=? LIMIT 1",
-        arrayOf(conversationId.toString()),
-    ).use { it.moveToFirst() }
+    fun conversationExists(conversationId: Long): Boolean =
+        conversationExists(readableDatabase, conversationId)
 
     @Synchronized
     fun projectExists(projectId: Long): Boolean = projectExists(readableDatabase, projectId)
@@ -117,8 +105,9 @@ class ChatHistoryStore(context: Context) : SQLiteOpenHelper(
         require(role == "user" || role == "assistant") { "不支持的消息角色" }
         val text = content.trim()
         if (text.isBlank()) return
+
         val db = writableDatabase
-        require(conversationExists(conversationId)) { "历史会话不存在" }
+        require(conversationExists(db, conversationId)) { "历史会话不存在：$conversationId" }
         val now = System.currentTimeMillis()
         db.beginTransaction()
         try {
@@ -156,8 +145,8 @@ class ChatHistoryStore(context: Context) : SQLiteOpenHelper(
     @Synchronized
     fun moveConversation(conversationId: Long, projectId: Long) {
         val db = writableDatabase
-        require(conversationExists(conversationId)) { "历史会话不存在" }
-        require(projectExists(db, projectId)) { "目标项目不存在" }
+        require(conversationExists(db, conversationId)) { "历史会话不存在：$conversationId" }
+        require(projectExists(db, projectId)) { "目标项目不存在：$projectId" }
         val now = System.currentTimeMillis()
         db.execSQL(
             "UPDATE conversations SET project_id=?, updated_at=? WHERE id=?",
@@ -169,7 +158,7 @@ class ChatHistoryStore(context: Context) : SQLiteOpenHelper(
     @Synchronized
     fun snapshot(currentConversationId: Long?): String {
         val db = readableDatabase
-        val current = currentConversationId?.takeIf { conversationExists(it) }
+        val current = currentConversationId?.takeIf { conversationExists(db, it) }
         val root = JSONObject()
         val projects = JSONArray()
 
@@ -256,10 +245,23 @@ class ChatHistoryStore(context: Context) : SQLiteOpenHelper(
         arrayOf(DEFAULT_PROJECT_NAME),
     ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else 0L }
 
+    private fun conversationExists(db: SQLiteDatabase, conversationId: Long): Boolean = db.rawQuery(
+        "SELECT 1 FROM conversations WHERE id=? LIMIT 1",
+        arrayOf(conversationId.toString()),
+    ).use { it.moveToFirst() }
+
     private fun projectExists(db: SQLiteDatabase, projectId: Long): Boolean = db.rawQuery(
         "SELECT 1 FROM projects WHERE id=? LIMIT 1",
         arrayOf(projectId.toString()),
     ).use { it.moveToFirst() }
+
+    private fun lastInsertRowId(db: SQLiteDatabase): Long = db.rawQuery(
+        "SELECT last_insert_rowid()",
+        null,
+    ).use { cursor ->
+        check(cursor.moveToFirst()) { "无法读取 SQLite 插入 ID" }
+        cursor.getLong(0)
+    }
 
     private fun titleFrom(text: String): String {
         val singleLine = text.replace(Regex("\\s+"), " ").trim()

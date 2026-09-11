@@ -29,6 +29,7 @@ import com.ergouf.gecis.runtime.AntigravityOAuthCoordinator
 import com.ergouf.gecis.runtime.AntigravityRuntime
 import com.ergouf.gecis.runtime.ChatRuntime
 import com.ergouf.gecis.runtime.KnowledgeAugmentingRuntime
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.util.concurrent.Executors
@@ -133,10 +134,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             webChromeClient = WebChromeClient()
             webViewClient = object : WebViewClientCompat() {
-                override fun shouldOverrideUrlLoading(
-                    view: WebView,
-                    request: WebResourceRequest,
-                ): Boolean {
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     val url = request.url
                     if (isBundledAsset(url)) return false
                     if (request.isForMainFrame && (url.scheme == "https" || url.scheme == "http")) {
@@ -145,13 +143,8 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                     return true
                 }
 
-                override fun shouldInterceptRequest(
-                    view: WebView,
-                    request: WebResourceRequest,
-                ): WebResourceResponse? {
-                    if (isBundledAsset(request.url)) {
-                        return assetLoader.shouldInterceptRequest(request.url)
-                    }
+                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                    if (isBundledAsset(request.url)) return assetLoader.shouldInterceptRequest(request.url)
                     return blockedResource()
                 }
 
@@ -205,9 +198,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         fun sendMessage(requestId: String, text: String) {
             runOnUiThread {
                 try {
-                    if (pendingAfterDatabase != null || pendingAfterAuth != null || inflight != null) {
-                        return@runOnUiThread
-                    }
+                    if (pendingAfterDatabase != null || pendingAfterAuth != null || inflight != null) return@runOnUiThread
                     handleSubmittedMessage(PendingMessage(requestId, text, null))
                 } catch (error: Throwable) {
                     onError(requestId, "准备对话失败：${error.message ?: error.javaClass.simpleName}")
@@ -230,11 +221,8 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
         @JavascriptInterface
         fun newConversation(projectId: Long): String = runCatching {
-            require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) {
-                "当前消息尚未完成"
-            }
-            val resolvedProject = projectId.takeIf(historyStore::projectExists)
-                ?: historyStore.ensureDefaultProject()
+            require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) { "当前消息尚未完成" }
+            val resolvedProject = projectId.takeIf(historyStore::projectExists) ?: historyStore.ensureDefaultProject()
             currentProjectId = resolvedProject
             currentConversationId = historyStore.createConversation(resolvedProject)
             historyStore.snapshot(currentConversationId)
@@ -242,9 +230,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
         @JavascriptInterface
         fun openConversation(conversationId: Long): String = runCatching {
-            require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) {
-                "当前消息尚未完成"
-            }
+            require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) { "当前消息尚未完成" }
             require(historyStore.conversationExists(conversationId)) { "历史会话不存在" }
             currentConversationId = conversationId
             historyStore.snapshot(currentConversationId)
@@ -284,29 +270,21 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         val requestedProject = currentProjectId
         emitStatus("正在准备对话…", "working")
         historyWorker.execute {
-            val conversationId = runCatching {
+            val conversationResult = runCatching {
                 requestedConversation?.takeIf(historyStore::conversationExists)
                     ?: historyStore.createConversation(requestedProject)
-            }.getOrNull()
-
-            val historyError = if (conversationId != null) {
-                runCatching {
-                    historyStore.appendMessage(conversationId, "user", message.text)
-                }.exceptionOrNull()
+            }
+            val conversationId = conversationResult.getOrNull()
+            val saveResult = if (conversationId != null) {
+                runCatching { historyStore.appendMessage(conversationId, "user", message.text) }
             } else {
-                IllegalStateException("无法创建本地历史会话")
+                Result.failure(conversationResult.exceptionOrNull() ?: IllegalStateException("无法创建本地历史会话"))
             }
 
             runOnUiThread {
-                if (conversationId != null) {
-                    currentConversationId = conversationId
-                    currentProjectId = runCatching {
-                        val snapshot = JSONObject(historyStore.snapshot(conversationId))
-                        snapshot.optLong("currentProjectId").takeIf { it > 0L }
-                    }.getOrNull() ?: currentProjectId
-                }
-                if (historyError != null) {
-                    emitStatus("历史记录暂未保存，继续对话", "error")
+                if (conversationId != null) currentConversationId = conversationId
+                saveResult.exceptionOrNull()?.let { error ->
+                    emitStatus("历史记录保存失败：${shortError(error)}", "error")
                 }
                 emitHistory()
                 continueMessage(message.copy(conversationId = conversationId))
@@ -343,6 +321,14 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
     override fun onAuthenticated() {
         runOnUiThread {
+            // The localhost success page also deep-links back. This self-intent is a second layer
+            // for browsers/ROMs that leave the external browser task in front after token exchange.
+            runCatching {
+                startActivity(
+                    Intent(this, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                )
+            }
             val pending = pendingAfterAuth
             pendingAfterAuth = null
             emitStatus("Google 账号已连接", "success")
@@ -358,11 +344,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         runOnUiThread {
             val message = inflight?.takeIf { it.requestId == requestId }
             inflight = null
-            if (message != null) {
-                beginGoogleOAuth(message)
-            } else {
-                onError(requestId, "Google 登录已失效，请重新登录")
-            }
+            if (message != null) beginGoogleOAuth(message) else onError(requestId, "Google 登录已失效，请重新登录")
         }
     }
 
@@ -391,13 +373,11 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
         val conversationId = completed?.conversationId ?: return
         historyWorker.execute {
-            val error = runCatching {
-                historyStore.appendMessage(conversationId, "assistant", text)
-            }.exceptionOrNull()
-            if (error == null) {
+            val result = runCatching { historyStore.appendMessage(conversationId, "assistant", text) }
+            if (result.isSuccess) {
                 emitHistory()
             } else {
-                emitStatus("回答完成，但历史记录保存失败", "error")
+                emitStatus("回答完成，但历史记录保存失败：${shortError(result.exceptionOrNull())}", "error")
             }
         }
     }
@@ -417,55 +397,45 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
     private fun emit(type: String, requestId: String, text: String) {
         runOnUiThread {
-            val payload = JSONObject()
-                .put("type", type)
-                .put("requestId", requestId)
-                .put("text", text)
-                .toString()
-            webView.evaluateJavascript(
-                "window.GecisChat && window.GecisChat.onNativeEvent($payload);",
-                null,
-            )
+            val payload = JSONObject().put("type", type).put("requestId", requestId).put("text", text).toString()
+            webView.evaluateJavascript("window.GecisChat && window.GecisChat.onNativeEvent($payload);", null)
         }
     }
 
     private fun emitStatus(text: String, state: String) {
         runOnUiThread {
             if (!::webView.isInitialized) return@runOnUiThread
-            val payload = JSONObject()
-                .put("text", text)
-                .put("state", state)
-                .toString()
-            webView.evaluateJavascript(
-                "window.GecisChat && window.GecisChat.onStatus($payload);",
-                null,
-            )
+            val payload = JSONObject().put("text", text).put("state", state).toString()
+            webView.evaluateJavascript("window.GecisChat && window.GecisChat.onStatus($payload);", null)
         }
     }
 
     private fun emitHistory() {
         if (!::webView.isInitialized || historyWorker.isShutdown) return
         historyWorker.execute {
-            val snapshot = runCatching {
-                historyStore.snapshot(currentConversationId)
-            }.getOrElse { historyErrorSnapshot(it) }
+            val snapshot = runCatching { historyStore.snapshot(currentConversationId) }
+                .getOrElse { historyErrorSnapshot(it) }
             runOnUiThread {
                 if (!::webView.isInitialized) return@runOnUiThread
-                webView.evaluateJavascript(
-                    "window.GecisChat && window.GecisChat.onHistory($snapshot);",
-                    null,
-                )
+                webView.evaluateJavascript("window.GecisChat && window.GecisChat.onHistory($snapshot);", null)
             }
         }
     }
 
     private fun historyErrorSnapshot(error: Throwable): String = JSONObject()
-        .put("projects", org.json.JSONArray())
-        .put("messages", org.json.JSONArray())
+        .put("projects", JSONArray())
+        .put("messages", JSONArray())
         .put("currentConversationId", JSONObject.NULL)
         .put("currentProjectId", JSONObject.NULL)
         .put("error", error.message ?: "历史记录不可用")
         .toString()
+
+    private fun shortError(error: Throwable?): String {
+        if (error == null) return "未知 SQLite 错误"
+        val name = error.javaClass.simpleName
+        val message = error.message?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
+        return if (message.isBlank()) name else "$name: ${message.take(140)}"
+    }
 
     private fun emitInsets() {
         if (!::webView.isInitialized) return
@@ -484,7 +454,6 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
               root.style.setProperty('--android-safe-bottom', '${bottom}px');
               root.style.setProperty('--android-safe-left', '${left}px');
               root.style.setProperty('--android-ime-bottom', '${imeBottom}px');
-
               let style = document.getElementById('gecis-native-insets');
               if (!style) {
                 style = document.createElement('style');
@@ -492,21 +461,9 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                 style.textContent = `
                   html, body, .app { min-height: 100%; }
                   body { padding: 0; }
-                  header {
-                    height: calc(54px + var(--android-safe-top, 0px));
-                    padding-top: var(--android-safe-top, 0px);
-                    padding-left: calc(14px + var(--android-safe-left, 0px));
-                    padding-right: calc(14px + var(--android-safe-right, 0px));
-                  }
-                  main {
-                    padding-left: calc(18px + var(--android-safe-left, 0px));
-                    padding-right: calc(18px + var(--android-safe-right, 0px));
-                  }
-                  .composer-wrap {
-                    padding-left: calc(14px + var(--android-safe-left, 0px));
-                    padding-right: calc(14px + var(--android-safe-right, 0px));
-                    padding-bottom: calc(12px + max(var(--android-safe-bottom, 0px), var(--android-ime-bottom, 0px)));
-                  }
+                  header { height: calc(54px + var(--android-safe-top, 0px)); padding-top: var(--android-safe-top, 0px); padding-left: calc(14px + var(--android-safe-left, 0px)); padding-right: calc(14px + var(--android-safe-right, 0px)); }
+                  main { padding-left: calc(18px + var(--android-safe-left, 0px)); padding-right: calc(18px + var(--android-safe-right, 0px)); }
+                  .composer-wrap { padding-left: calc(14px + var(--android-safe-left, 0px)); padding-right: calc(14px + var(--android-safe-right, 0px)); padding-bottom: calc(12px + max(var(--android-safe-bottom, 0px), var(--android-ime-bottom, 0px))); }
                 `;
                 document.head.appendChild(style);
               }
@@ -528,25 +485,15 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     }
 
     private fun isBundledAsset(uri: Uri): Boolean =
-        uri.scheme == "https" &&
-            uri.host == APP_HOST &&
-            uri.path?.startsWith("/assets/") == true
+        uri.scheme == "https" && uri.host == APP_HOST && uri.path?.startsWith("/assets/") == true
 
     private fun openExternalUrl(uri: Uri) {
-        try {
-            startActivity(Intent(Intent.ACTION_VIEW, uri))
-        } catch (_: ActivityNotFoundException) {
-            Toast.makeText(this, "无法打开链接", Toast.LENGTH_SHORT).show()
-        }
+        try { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+        catch (_: ActivityNotFoundException) { Toast.makeText(this, "无法打开链接", Toast.LENGTH_SHORT).show() }
     }
 
     private fun blockedResource(): WebResourceResponse = WebResourceResponse(
-        "text/plain",
-        "utf-8",
-        403,
-        "Blocked",
-        emptyMap(),
-        ByteArrayInputStream(ByteArray(0)),
+        "text/plain", "utf-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)),
     )
 
     private data class PendingMessage(

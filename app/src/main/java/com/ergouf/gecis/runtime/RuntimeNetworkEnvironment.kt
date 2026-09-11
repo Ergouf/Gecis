@@ -27,6 +27,20 @@ internal object RuntimeNetworkEnvironment {
     private const val NSSWITCH_CONF = "nsswitch.conf"
     private const val CA_BUNDLE = "cacert.pem"
     private const val CA_ASSET = "runtime/cacert.pem"
+    private const val MAX_ADDRESSES_PER_HOST = 4
+
+    // Endpoints observed in Antigravity/Cloud Code integrations. The runtime still retains DNS
+    // fallback for future endpoints, but these critical hosts bypass glibc DNS and therefore
+    // follow Android's active VPN/private-DNS resolver exactly.
+    private val ANTIGRAVITY_HOSTS = listOf(
+        "daily-cloudcode-pa.googleapis.com",
+        "cloudcode-pa.googleapis.com",
+        "cloudaicompanion.googleapis.com",
+        "antigravity-pa.googleapis.com",
+        "antigravity.googleapis.com",
+        "alkalicore-pa.clients6.google.com",
+        "alkalimakersuite-pa.clients6.google.com",
+    )
 
     data class Prepared(
         val resolvConf: File,
@@ -222,21 +236,4 @@ internal object RuntimeNetworkEnvironment {
         val host: String,
         val addresses: List<InetAddress>,
     )
-
-    companion object {
-        private const val MAX_ADDRESSES_PER_HOST = 4
-
-        // Endpoints observed in Antigravity/Cloud Code integrations. The runtime still retains DNS
-        // fallback for future endpoints, but these critical hosts bypass glibc DNS and therefore
-        // follow Android's active VPN/private-DNS resolver exactly.
-        private val ANTIGRAVITY_HOSTS = listOf(
-            "daily-cloudcode-pa.googleapis.com",
-            "cloudcode-pa.googleapis.com",
-            "cloudaicompanion.googleapis.com",
-            "antigravity-pa.googleapis.com",
-            "antigravity.googleapis.com",
-            "alkalicore-pa.clients6.google.com",
-            "alkalimakersuite-pa.clients6.google.com",
-        )
-    }
 }

@@ -29,6 +29,7 @@ class AntigravityRuntime(
     private var pending: Pending? = null
     private var closed = false
     private var runtimeNetworkSummary = "网络状态未知"
+    private var runtimeCredentialCaptured = false
     private val stderrTail = ArrayDeque<String>()
 
     override fun send(requestId: String, text: String, listener: ChatRuntime.Listener) {
@@ -89,10 +90,16 @@ class AntigravityRuntime(
 
         resetProcessLocked()
         stderrTail.clear()
+        runtimeCredentialCaptured = false
         val spec = NativeRuntimeSpec.resolve(context)
         val home = AntigravityEnvironment.prepareHome(context)
         val network = RuntimeNetworkEnvironment.prepare(context)
         runtimeNetworkSummary = network.summary
+
+        // Use Antigravity's own credential files rather than relying on JETSKI_OAUTH_TOKEN.
+        // The encrypted Android Keystore vault remains the durable source. Plaintext exists only
+        // inside the app-private sandbox while agy is starting/refeshing its session.
+        AntigravityEnvironment.materializeOAuthToken(context, oauthCredential)
 
         val builder = ProcessBuilder(spec.headlessCommand())
             .directory(context.noBackupFilesDir)
@@ -101,14 +108,17 @@ class AntigravityRuntime(
         builder.environment().apply {
             remove("LD_PRELOAD")
             remove("LD_LIBRARY_PATH")
+            remove("JETSKI_OAUTH_TOKEN")
             putAll(AntigravityEnvironment.baseEnvironment(context, home, network))
             putAll(network.proxyEnvironment)
-            // v1.2.0 exposes this credential entry point directly. Keep the OAuth JSON out of
-            // WebView/state files and inject it only into the child process environment.
-            put("JETSKI_OAUTH_TOKEN", oauthCredential)
         }
 
-        val newProcess = builder.start()
+        val newProcess = try {
+            builder.start()
+        } catch (error: Throwable) {
+            AntigravityEnvironment.clearPlaintextOAuthTokens(context)
+            throw error
+        }
         process = newProcess
         writer = BufferedWriter(OutputStreamWriter(newProcess.outputStream, Charsets.UTF_8))
 
@@ -127,6 +137,7 @@ class AntigravityRuntime(
         } catch (error: Throwable) {
             Log.e(TAG, "Antigravity stdout reader failed", error)
         } finally {
+            captureRuntimeCredentialAndClear()
             val active = synchronized(lock) {
                 if (process !== owner) return@synchronized null
                 val value = pending
@@ -185,6 +196,15 @@ class AntigravityRuntime(
         return diagnostics
     }
 
+    private fun captureRuntimeCredentialAndClear() {
+        synchronized(lock) {
+            if (runtimeCredentialCaptured) return
+            runtimeCredentialCaptured = true
+        }
+        AntigravityEnvironment.capturePlaintextOAuthToken(context, tokenVault)
+        AntigravityEnvironment.clearPlaintextOAuthTokens(context)
+    }
+
     private fun handleAuthenticationRequired(owner: Process) {
         var active: Pending? = null
         synchronized(lock) {
@@ -216,6 +236,7 @@ class AntigravityRuntime(
 
         when (event.optString("event")) {
             "step_update" -> {
+                captureRuntimeCredentialAndClear()
                 val delta = event.optJSONObject("step_update")?.optString("text_delta").orEmpty()
                 if (delta.isEmpty()) return
                 val active = synchronized(lock) {
@@ -240,12 +261,14 @@ class AntigravityRuntime(
                     AntigravityEnvironment.clearPlaintextOAuthTokens(context)
                     mainHandler.post { active.listener.onAuthenticationRequired(active.requestId) }
                 } else if (errorText.isNotBlank() || status in TERMINAL_ERRORS) {
+                    captureRuntimeCredentialAndClear()
                     deliverError(
                         active.listener,
                         active.requestId,
                         buildFailureMessage(errorText.ifBlank { "AI runtime 返回状态：$status" }),
                     )
                 } else {
+                    captureRuntimeCredentialAndClear()
                     val finalText = response.ifBlank { active.buffer.toString() }
                     mainHandler.post { active.listener.onComplete(active.requestId, finalText) }
                 }
@@ -267,6 +290,7 @@ class AntigravityRuntime(
             resetProcessLocked()
             value
         }
+        captureRuntimeCredentialAndClear()
         active?.let { deliverError(it.listener, it.requestId, "会话已关闭") }
         io.shutdownNow()
     }
@@ -296,6 +320,7 @@ class AntigravityRuntime(
         private val TERMINAL_ERRORS = setOf("ERROR", "CANCELED", "INTERRUPTED", "INVALID")
         private val AUTH_ERRORS = listOf(
             "authentication required",
+            "authentication failed or timed out",
             "unauthenticated",
             "not logged in",
             "please sign in",
@@ -308,8 +333,8 @@ internal object AntigravityEnvironment {
     private const val HOME_DIR = "agy-home"
     private val TOKEN_RELATIVE_PATHS = listOf(
         ".gemini/jetski-standalone-oauth-token",
-        ".gemini/antigravity-cli/jetski-standalone-oauth-token",
         ".gemini/antigravity-cli/antigravity-oauth-token",
+        ".gemini/antigravity-cli/jetski-standalone-oauth-token",
     )
 
     fun home(context: Context): File = File(context.noBackupFilesDir, HOME_DIR)
@@ -332,12 +357,29 @@ internal object AntigravityEnvironment {
     fun tokenFiles(context: Context): List<File> =
         TOKEN_RELATIVE_PATHS.map { File(home(context), it) }
 
+    fun materializeOAuthToken(context: Context, credential: String) {
+        require(credential.isNotBlank()) { "Google OAuth 凭据为空" }
+        clearPlaintextOAuthTokens(context)
+        tokenFiles(context).forEach { file ->
+            file.parentFile?.mkdirs()
+            file.writeText(credential, Charsets.UTF_8)
+            runCatching { Os.chmod(file.absolutePath, 384) }
+        }
+    }
+
     fun capturePlaintextOAuthToken(context: Context, vault: OAuthTokenVault): Boolean {
-        for (file in tokenFiles(context)) {
-            if (!file.isFile || file.length() == 0L) continue
+        val candidates = tokenFiles(context)
+            .filter { it.isFile && it.length() > 0L }
+            .sortedByDescending { it.lastModified() }
+        for (file in candidates) {
             try {
-                vault.save(file.readText())
-                clearPlaintextOAuthTokens(context)
+                val credential = file.readText(Charsets.UTF_8)
+                val parsed = JSONObject(credential)
+                val token = parsed.optJSONObject("token") ?: continue
+                if (token.optString("access_token").isBlank() ||
+                    token.optString("refresh_token").isBlank()
+                ) continue
+                vault.save(credential)
                 return true
             } catch (_: Throwable) {
                 // Keep looking; different Antigravity builds use different token locations.

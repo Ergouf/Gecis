@@ -306,19 +306,48 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
     private fun emitInsets() {
         if (!::webView.isInitialized) return
-        val payload = JSONObject()
-            .put("top", lastInsets.top)
-            .put("right", lastInsets.right)
-            .put("bottom", lastInsets.bottom)
-            .put("left", lastInsets.left)
-            .put("imeBottom", lastImeBottom)
-            .toString()
-        webView.post {
-            webView.evaluateJavascript(
-                "window.GecisChat && window.GecisChat.onInsets($payload);",
-                null,
-            )
-        }
+        val top = lastInsets.top
+        val right = lastInsets.right
+        val bottom = lastInsets.bottom
+        val left = lastInsets.left
+        val imeBottom = lastImeBottom
+        val script = """
+            (() => {
+              const root = document.documentElement;
+              root.style.setProperty('--android-safe-top', '${top}px');
+              root.style.setProperty('--android-safe-right', '${right}px');
+              root.style.setProperty('--android-safe-bottom', '${bottom}px');
+              root.style.setProperty('--android-safe-left', '${left}px');
+              root.style.setProperty('--android-ime-bottom', '${imeBottom}px');
+
+              let style = document.getElementById('gecis-native-insets');
+              if (!style) {
+                style = document.createElement('style');
+                style.id = 'gecis-native-insets';
+                style.textContent = `
+                  html, body, .app { min-height: 100%; }
+                  body { padding: 0; }
+                  header {
+                    height: calc(58px + var(--android-safe-top, 0px));
+                    padding-top: var(--android-safe-top, 0px);
+                    padding-left: calc(18px + var(--android-safe-left, 0px));
+                    padding-right: calc(18px + var(--android-safe-right, 0px));
+                  }
+                  main {
+                    padding-left: calc(18px + var(--android-safe-left, 0px));
+                    padding-right: calc(18px + var(--android-safe-right, 0px));
+                  }
+                  .composer-wrap {
+                    padding-left: calc(14px + var(--android-safe-left, 0px));
+                    padding-right: calc(14px + var(--android-safe-right, 0px));
+                    padding-bottom: calc(12px + max(var(--android-safe-bottom, 0px), var(--android-ime-bottom, 0px)));
+                  }
+                `;
+                document.head.appendChild(style);
+              }
+            })();
+        """.trimIndent()
+        webView.post { webView.evaluateJavascript(script, null) }
     }
 
     private fun formatCopyProgress(progress: FenbiKnowledgeBase.ImportProgress): String {

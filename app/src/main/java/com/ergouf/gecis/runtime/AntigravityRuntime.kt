@@ -3,6 +3,7 @@ package com.ergouf.gecis.runtime
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.system.Os
 import android.util.Log
 import com.ergouf.gecis.auth.OAuthTokenVault
 import org.json.JSONObject
@@ -369,6 +370,7 @@ internal data class NativeRuntimeSpec(
     val loader: File,
     val engine: File,
     val nativeDir: File,
+    val runtimeLibDir: File,
 ) {
     fun headlessCommand(): List<String> = baseCommand() + listOf(
         "--input-format",
@@ -385,11 +387,16 @@ internal data class NativeRuntimeSpec(
     private fun baseCommand(): List<String> = listOf(
         loader.absolutePath,
         "--library-path",
-        nativeDir.absolutePath,
+        runtimeLibDir.absolutePath,
         engine.absolutePath,
     )
 
     companion object {
+        private const val LIBRARY_MAP_ASSET = "runtime/native-libs.map"
+        private const val RUNTIME_LIB_DIR = "native-runtime-libs"
+        private val SAFE_ORIGINAL_NAME = Regex("^[A-Za-z0-9._+\\-]+$")
+        private val SAFE_PACKAGED_NAME = Regex("^libgecis_[A-Za-z0-9_+\\-]+\\.so$")
+
         fun resolve(context: Context): NativeRuntimeSpec {
             val nativeDir = File(context.applicationInfo.nativeLibraryDir)
             val loader = File(nativeDir, "libgecis_ld.so")
@@ -399,7 +406,59 @@ internal data class NativeRuntimeSpec(
                     "Antigravity native payload 尚未打包。缺少 libgecis_ld.so 或 libgecis_agy.so",
                 )
             }
-            return NativeRuntimeSpec(loader, engine, nativeDir)
+
+            val runtimeLibDir = prepareOriginalSonameLinks(context, nativeDir)
+            return NativeRuntimeSpec(loader, engine, nativeDir, runtimeLibDir)
+        }
+
+        private fun prepareOriginalSonameLinks(context: Context, nativeDir: File): File {
+            val runtimeDir = File(context.noBackupFilesDir, RUNTIME_LIB_DIR)
+            if (runtimeDir.exists()) {
+                runtimeDir.listFiles()?.forEach { child ->
+                    if (!child.delete()) {
+                        throw RuntimeUnavailableException("无法更新 native runtime 依赖目录：${child.name}")
+                    }
+                }
+            } else if (!runtimeDir.mkdirs()) {
+                throw RuntimeUnavailableException("无法创建 native runtime 依赖目录")
+            }
+
+            val lines = try {
+                context.assets.open(LIBRARY_MAP_ASSET).bufferedReader(Charsets.UTF_8).use { it.readLines() }
+            } catch (error: Throwable) {
+                throw RuntimeUnavailableException("APK 缺少 native runtime 依赖映射：${error.message}")
+            }
+
+            var linked = 0
+            for (raw in lines) {
+                if (raw.isBlank()) continue
+                val parts = raw.split('\t', limit = 2)
+                if (parts.size != 2) {
+                    throw RuntimeUnavailableException("native runtime 依赖映射格式无效")
+                }
+                val original = parts[0].trim()
+                val packaged = parts[1].trim()
+                if (!SAFE_ORIGINAL_NAME.matches(original) || !SAFE_PACKAGED_NAME.matches(packaged)) {
+                    throw RuntimeUnavailableException("native runtime 依赖映射包含非法文件名")
+                }
+
+                val target = File(nativeDir, packaged)
+                if (!target.isFile) {
+                    throw RuntimeUnavailableException("APK 缺少 native runtime 依赖：$packaged")
+                }
+                val link = File(runtimeDir, original)
+                try {
+                    Os.symlink(target.absolutePath, link.absolutePath)
+                } catch (error: Throwable) {
+                    throw RuntimeUnavailableException("无法准备 native runtime 依赖 $original：${error.message}")
+                }
+                linked++
+            }
+
+            if (linked == 0) {
+                throw RuntimeUnavailableException("native runtime 依赖映射为空")
+            }
+            return runtimeDir
         }
     }
 }

@@ -2,6 +2,7 @@ package com.ergouf.gecis.runtime
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.ProxyInfo
 import android.net.Uri
@@ -15,6 +16,10 @@ import java.net.InetAddress
  * VPN/TUN routing is handled by Android at the UID/network layer. Explicit Android HTTP proxy
  * settings additionally need to be projected as standard proxy environment variables because the
  * embedded native process does not use Android's Java ProxySelector.
+ *
+ * Android's DNS resolver is also network-aware (including VPN/private-DNS routing), while the
+ * embedded Termux glibc resolver is not. Resolve Antigravity's known Google endpoints through the
+ * active Android Network and pin those answers into the private hosts file before starting agy.
  */
 internal object RuntimeNetworkEnvironment {
     private const val RESOLV_CONF = "resolv.conf"
@@ -58,8 +63,9 @@ internal object RuntimeNetworkEnvironment {
             throw IllegalStateException("当前网络没有可用 DNS，请检查网络连接")
         }
 
+        val pinnedHosts = resolveAntigravityHosts(activeNetwork)
         writeDns(dnsServers, resolvConf)
-        writeHosts(hostsFile)
+        writeHosts(hostsFile, pinnedHosts)
         writeNsswitch(nsswitchConf)
         copyPinnedCaBundle(context, caBundle)
 
@@ -70,7 +76,15 @@ internal object RuntimeNetworkEnvironment {
                 .firstOrNull()
         val proxyEnvironment = buildProxyEnvironment(proxy)
         val proxySummary = describeProxy(proxy)
-        val summary = "VPN=${if (usingVpn) "是" else "否"}，代理=$proxySummary"
+        val resolvedCount = pinnedHosts.count { it.addresses.isNotEmpty() }
+        val failedHosts = pinnedHosts.filter { it.addresses.isEmpty() }.map { it.host }
+        val dnsSummary = if (failedHosts.isEmpty()) {
+            "AndroidDNS=$resolvedCount/${ANTIGRAVITY_HOSTS.size}"
+        } else {
+            "AndroidDNS=$resolvedCount/${ANTIGRAVITY_HOSTS.size}，未解析=${failedHosts.joinToString(",")}" 
+        }
+        val summary =
+            "VPN=${if (usingVpn) "是" else "否"}，代理=$proxySummary，$dnsSummary"
 
         return Prepared(
             resolvConf = resolvConf,
@@ -80,6 +94,23 @@ internal object RuntimeNetworkEnvironment {
             proxyEnvironment = proxyEnvironment,
             summary = summary,
         )
+    }
+
+    private fun resolveAntigravityHosts(activeNetwork: Network?): List<ResolvedHost> {
+        if (activeNetwork == null) {
+            return ANTIGRAVITY_HOSTS.map { ResolvedHost(it, emptyList()) }
+        }
+        return ANTIGRAVITY_HOSTS.map { host ->
+            val addresses = runCatching {
+                activeNetwork.getAllByName(host)
+                    .asSequence()
+                    .filter { it.hostAddress?.isNotBlank() == true }
+                    .distinctBy { it.hostAddress }
+                    .take(MAX_ADDRESSES_PER_HOST)
+                    .toList()
+            }.getOrDefault(emptyList())
+            ResolvedHost(host, addresses)
+        }
     }
 
     private fun writeDns(dnsServers: Set<InetAddress>, destination: File) {
@@ -93,16 +124,26 @@ internal object RuntimeNetworkEnvironment {
         destination.writeText(text)
     }
 
-    private fun writeHosts(destination: File) {
+    private fun writeHosts(destination: File, resolvedHosts: List<ResolvedHost>) {
         destination.writeText(
-            "127.0.0.1 localhost localhost.localdomain\n" +
-                "::1 localhost localhost.localdomain ip6-localhost ip6-loopback\n",
+            buildString {
+                append("127.0.0.1 localhost localhost.localdomain\n")
+                append("::1 localhost localhost.localdomain ip6-localhost ip6-loopback\n")
+                for (resolved in resolvedHosts) {
+                    for (address in resolved.addresses) {
+                        val ip = address.hostAddress?.substringBefore('%').orEmpty()
+                        if (ip.isNotBlank()) {
+                            append(ip).append(' ').append(resolved.host).append('\n')
+                        }
+                    }
+                }
+            },
         )
     }
 
     private fun writeNsswitch(destination: File) {
-        // Resolve loopback/local aliases from the projected hosts file first, then use DNS for
-        // remote names. This is the minimal glibc NSS surface Antigravity needs on Android.
+        // Resolve loopback and Android-pre-resolved Antigravity endpoints from the projected hosts
+        // file first, then use glibc DNS only as a fallback for names we do not know in advance.
         destination.writeText(
             "hosts: files dns\n" +
                 "networks: files dns\n",
@@ -175,5 +216,27 @@ internal object RuntimeNetworkEnvironment {
                 error,
             )
         }
+    }
+
+    private data class ResolvedHost(
+        val host: String,
+        val addresses: List<InetAddress>,
+    )
+
+    companion object {
+        private const val MAX_ADDRESSES_PER_HOST = 4
+
+        // Endpoints observed in Antigravity/Cloud Code integrations. The runtime still retains DNS
+        // fallback for future endpoints, but these critical hosts bypass glibc DNS and therefore
+        // follow Android's active VPN/private-DNS resolver exactly.
+        private val ANTIGRAVITY_HOSTS = listOf(
+            "daily-cloudcode-pa.googleapis.com",
+            "cloudcode-pa.googleapis.com",
+            "cloudaicompanion.googleapis.com",
+            "antigravity-pa.googleapis.com",
+            "antigravity.googleapis.com",
+            "alkalicore-pa.clients6.google.com",
+            "alkalimakersuite-pa.clients6.google.com",
+        )
     }
 }

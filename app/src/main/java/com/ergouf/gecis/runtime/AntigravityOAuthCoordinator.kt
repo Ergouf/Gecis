@@ -166,7 +166,7 @@ class AntigravityOAuthCoordinator(
                     throw IllegalStateException("Google 回调缺少授权码")
                 }
 
-                redirectToSuccess(socket)
+                redirectToApp(socket)
                 return code
             } finally {
                 try {
@@ -209,10 +209,11 @@ class AntigravityOAuthCoordinator(
         output.flush()
     }
 
-    private fun redirectToSuccess(socket: Socket) {
+    private fun redirectToApp(socket: Socket) {
         val response = buildString {
             append("HTTP/1.1 302 Found\r\n")
-            append("Location: https://antigravity.google/auth-success\r\n")
+            append("Location: $APP_RETURN_URI\r\n")
+            append("Cache-Control: no-store\r\n")
             append("Content-Length: 0\r\n")
             append("Connection: close\r\n\r\n")
         }.toByteArray(Charsets.US_ASCII)
@@ -302,6 +303,7 @@ class AntigravityOAuthCoordinator(
         private const val CALLBACK_PORT = 51121
         private const val CALLBACK_PATH = "/oauth-callback"
         private const val REDIRECT_URI = "http://localhost:51121/oauth-callback"
+        private const val APP_RETURN_URI = "gecis://oauth-complete"
         private const val AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
         private const val TOKEN_URL = "https://oauth2.googleapis.com/token"
         private const val CLIENT_ID =

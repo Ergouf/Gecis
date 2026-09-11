@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Bold G / speech-bubble monogram. Kept inside the adaptive-icon safe zone. -->
+    <path
+        android:pathData="M73,35 C68,29 61,26 53,26 C37,26 25,38 25,54 C25,70 37,82 53,82 C65,82 74,76 79,68"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="10"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <path
+        android:pathData="M55,54 L81,54 L81,70"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="10"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- Small dialogue tail: the mark reads as both a G and a chat bubble. -->
+    <path
+        android:pathData="M34,78 L29,89 L43,82 Z"
+        android:fillColor="#FFFFFF" />
+
+    <!-- Tiny idea/spark accent. -->
+    <path
+        android:pathData="M82,27 L84.4,33.1 L91,35.5 L84.4,37.9 L82,44 L79.6,37.9 L73,35.5 L79.6,33.1 Z"
+        android:fillColor="#F5EAD4" />
+</vector>

@@ -1,9 +1,10 @@
 package com.ergouf.gecis.knowledge
 
 import android.content.Context
+import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
 import android.provider.OpenableColumns
-import android.database.sqlite.SQLiteDatabase
+import android.os.SystemClock
 import java.io.File
 
 /**
@@ -19,6 +20,23 @@ class FenbiKnowledgeBase(private val context: Context) {
         val text: String,
     )
 
+    enum class ImportPhase {
+        COPYING,
+        VALIDATING,
+        SAVING,
+    }
+
+    data class ImportProgress(
+        val phase: ImportPhase,
+        val bytesCopied: Long = 0L,
+        val totalBytes: Long? = null,
+    ) {
+        val fraction: Double?
+            get() = totalBytes
+                ?.takeIf { it > 0L }
+                ?.let { (bytesCopied.toDouble() / it.toDouble()).coerceIn(0.0, 1.0) }
+    }
+
     private val databaseDir = File(context.noBackupFilesDir, "knowledge").apply { mkdirs() }
     private val databaseFile = File(databaseDir, DATABASE_NAME)
     private val lock = Any()
@@ -28,30 +46,77 @@ class FenbiKnowledgeBase(private val context: Context) {
 
     fun hasDatabase(): Boolean = databaseFile.isFile && databaseFile.length() > SQLITE_HEADER.size
 
-    fun importedDisplayName(uri: Uri): String? = runCatching {
-        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-            ?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getString(0) else null
-            }
-    }.getOrNull()
+    fun importedDisplayName(uri: Uri): String? = queryDocumentMetadata(uri).first
 
     /**
      * Copies a Storage Access Framework document into private storage, validates it, then swaps it
      * in atomically. The original document is never modified.
      */
-    fun importFrom(uri: Uri) {
+    fun importFrom(
+        uri: Uri,
+        onProgress: (ImportProgress) -> Unit = {},
+    ) {
         synchronized(lock) {
             databaseDir.mkdirs()
             val temp = File(databaseDir, "$DATABASE_NAME.importing")
             temp.delete()
+            val totalBytes = queryDocumentMetadata(uri).second
 
             try {
+                onProgress(ImportProgress(ImportPhase.COPYING, totalBytes = totalBytes))
                 context.contentResolver.openInputStream(uri)?.use { input ->
-                    temp.outputStream().use { output -> input.copyTo(output) }
+                    temp.outputStream().buffered(COPY_BUFFER_SIZE).use { output ->
+                        val buffer = ByteArray(COPY_BUFFER_SIZE)
+                        var copied = 0L
+                        var lastProgressAt = 0L
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            if (count == 0) continue
+                            output.write(buffer, 0, count)
+                            copied += count
+
+                            val now = SystemClock.elapsedRealtime()
+                            if (now - lastProgressAt >= PROGRESS_INTERVAL_MS ||
+                                (totalBytes != null && copied >= totalBytes)
+                            ) {
+                                onProgress(
+                                    ImportProgress(
+                                        ImportPhase.COPYING,
+                                        bytesCopied = copied,
+                                        totalBytes = totalBytes,
+                                    ),
+                                )
+                                lastProgressAt = now
+                            }
+                        }
+                        output.flush()
+                        onProgress(
+                            ImportProgress(
+                                ImportPhase.COPYING,
+                                bytesCopied = copied,
+                                totalBytes = totalBytes ?: copied,
+                            ),
+                        )
+                    }
                 } ?: throw IllegalArgumentException("无法读取所选 fenbi.db")
 
+                onProgress(
+                    ImportProgress(
+                        ImportPhase.VALIDATING,
+                        bytesCopied = temp.length(),
+                        totalBytes = totalBytes ?: temp.length(),
+                    ),
+                )
                 validateDatabase(temp)
 
+                onProgress(
+                    ImportProgress(
+                        ImportPhase.SAVING,
+                        bytesCopied = temp.length(),
+                        totalBytes = totalBytes ?: temp.length(),
+                    ),
+                )
                 val previous = File(databaseDir, "$DATABASE_NAME.previous")
                 previous.delete()
                 if (databaseFile.exists() && !databaseFile.renameTo(previous)) {
@@ -116,6 +181,23 @@ class FenbiKnowledgeBase(private val context: Context) {
             </user_question>
         """.trimIndent()
     }
+
+    private fun queryDocumentMetadata(uri: Uri): Pair<String?, Long?> = runCatching {
+        context.contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use null to null
+            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+            val name = if (nameIndex >= 0 && !cursor.isNull(nameIndex)) cursor.getString(nameIndex) else null
+            val size = if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) cursor.getLong(sizeIndex) else null
+            name to size?.takeIf { it > 0L }
+        } ?: (null to null)
+    }.getOrDefault(null to null)
 
     private fun validateDatabase(file: File) {
         require(file.length() >= SQLITE_HEADER.size) { "所选文件不是有效的 SQLite 数据库" }
@@ -310,6 +392,8 @@ class FenbiKnowledgeBase(private val context: Context) {
         private const val MAX_CONTEXT_CHARS = 10_000
         private const val LONG_TERM_THRESHOLD = 12
         private const val SEARCH_WINDOW = 8
+        private const val COPY_BUFFER_SIZE = 1024 * 1024
+        private const val PROGRESS_INTERVAL_MS = 120L
 
         private val SQLITE_HEADER = "SQLite format 3\u0000".toByteArray(Charsets.US_ASCII)
         private val FTS_SHADOW_SUFFIXES = listOf("_data", "_idx", "_docsize", "_config")

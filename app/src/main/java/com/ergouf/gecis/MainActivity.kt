@@ -164,6 +164,13 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
         setContentView(webView)
         ViewCompat.requestApplyInsets(webView)
+        handleAppReturnIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleAppReturnIntent(intent)
     }
 
     override fun onDestroy() {
@@ -275,6 +282,13 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         if (inflight?.requestId == requestId) inflight = null
         emitStatus("发生错误", "error")
         emit("error", requestId, message)
+    }
+
+    private fun handleAppReturnIntent(intent: Intent?) {
+        val data = intent?.data ?: return
+        if (data.scheme == APP_RETURN_SCHEME && data.host == APP_RETURN_HOST) {
+            emitStatus("正在完成 Google 登录…", "working")
+        }
     }
 
     private fun emit(type: String, requestId: String, text: String) {
@@ -389,5 +403,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     companion object {
         private const val APP_HOST = "appassets.androidplatform.net"
         private const val APP_URL = "https://$APP_HOST/assets/index.html"
+        private const val APP_RETURN_SCHEME = "gecis"
+        private const val APP_RETURN_HOST = "oauth-complete"
     }
 }

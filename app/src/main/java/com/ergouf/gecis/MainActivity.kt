@@ -42,26 +42,36 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         val pending = pendingAfterDatabase ?: return@registerForActivityResult
         if (uri == null) {
             pendingAfterDatabase = null
+            emitStatus("未选择 fenbi.db", "error")
             onError(pending.requestId, "未选择 fenbi.db")
             return@registerForActivityResult
         }
 
-        Toast.makeText(this, "正在导入 fenbi.db…", Toast.LENGTH_SHORT).show()
+        val displayName = knowledgeBase.importedDisplayName(uri) ?: "fenbi.db"
+        emitStatus("正在准备导入 $displayName…", "working")
         importWorker.execute {
             try {
-                knowledgeBase.importFrom(uri)
+                knowledgeBase.importFrom(uri) { progress ->
+                    val status = when (progress.phase) {
+                        FenbiKnowledgeBase.ImportPhase.COPYING -> formatCopyProgress(progress)
+                        FenbiKnowledgeBase.ImportPhase.VALIDATING -> "文件复制完成，正在校验数据库…"
+                        FenbiKnowledgeBase.ImportPhase.SAVING -> "校验通过，正在完成导入…"
+                    }
+                    emitStatus(status, "working")
+                }
                 runOnUiThread {
                     if (pendingAfterDatabase?.requestId != pending.requestId) return@runOnUiThread
                     pendingAfterDatabase = null
-                    val name = knowledgeBase.importedDisplayName(uri) ?: "fenbi.db"
-                    Toast.makeText(this, "$name 已就绪", Toast.LENGTH_SHORT).show()
+                    emitStatus("$displayName 导入成功", "success")
                     continueMessage(pending)
                 }
             } catch (error: Throwable) {
                 runOnUiThread {
                     if (pendingAfterDatabase?.requestId == pending.requestId) {
                         pendingAfterDatabase = null
-                        onError(pending.requestId, error.message ?: "fenbi.db 导入失败")
+                        val message = error.message ?: "fenbi.db 导入失败"
+                        emitStatus("导入失败：$message", "error")
+                        onError(pending.requestId, message)
                     }
                 }
             }
@@ -146,7 +156,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
         if (!knowledgeBase.hasDatabase()) {
             pendingAfterDatabase = message
-            Toast.makeText(this, "首次使用请选择 fenbi.db", Toast.LENGTH_SHORT).show()
+            emitStatus("请选择 fenbi.db", "working")
             openFenbiDatabase.launch(arrayOf("*/*"))
             return
         }
@@ -157,6 +167,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private fun continueMessage(message: PendingMessage) {
         if (tokenVault.hasCredential()) {
             inflight = message
+            emitStatus("正在检索并思考…", "working")
             runtime.send(message.requestId, message.text, this)
         } else {
             beginGoogleOAuth(message)
@@ -166,7 +177,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private fun beginGoogleOAuth(message: PendingMessage) {
         if (pendingAfterAuth != null) return
         pendingAfterAuth = message
-        Toast.makeText(this, "请使用 Google 账号登录", Toast.LENGTH_SHORT).show()
+        emitStatus("正在连接 Google 账号…", "working")
         oauth.start(this)
     }
 
@@ -184,9 +195,10 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         runOnUiThread {
             val pending = pendingAfterAuth
             pendingAfterAuth = null
-            Toast.makeText(this, "Google 账号已连接", Toast.LENGTH_SHORT).show()
+            emitStatus("Google 账号已连接", "success")
             if (pending != null) {
                 inflight = pending
+                emitStatus("正在检索并思考…", "working")
                 runtime.send(pending.requestId, pending.text, this@MainActivity)
             }
         }
@@ -212,20 +224,24 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         oauth.cancel()
         val pending = pendingAfterAuth
         pendingAfterAuth = null
+        emitStatus("Google 登录失败：$message", "error")
         if (pending != null) onError(pending.requestId, message)
     }
 
     override fun onDelta(requestId: String, text: String) {
+        emitStatus("正在回答…", "working")
         emit("delta", requestId, text)
     }
 
     override fun onComplete(requestId: String, text: String) {
         if (inflight?.requestId == requestId) inflight = null
+        emitStatus("已就绪", "idle")
         emit("complete", requestId, text)
     }
 
     override fun onError(requestId: String, message: String) {
         if (inflight?.requestId == requestId) inflight = null
+        emitStatus("发生错误", "error")
         emit("error", requestId, message)
     }
 
@@ -240,6 +256,31 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                 "window.GecisChat && window.GecisChat.onNativeEvent($payload);",
                 null,
             )
+        }
+    }
+
+    private fun emitStatus(text: String, state: String) {
+        runOnUiThread {
+            val payload = JSONObject()
+                .put("text", text)
+                .put("state", state)
+                .toString()
+            webView.evaluateJavascript(
+                "window.GecisChat && window.GecisChat.onStatus($payload);",
+                null,
+            )
+        }
+    }
+
+    private fun formatCopyProgress(progress: FenbiKnowledgeBase.ImportProgress): String {
+        val copiedMb = progress.bytesCopied / (1024.0 * 1024.0)
+        val total = progress.totalBytes
+        return if (total != null && total > 0L) {
+            val totalMb = total / (1024.0 * 1024.0)
+            val percent = ((progress.fraction ?: 0.0) * 100.0).toInt().coerceIn(0, 100)
+            "正在导入 fenbi.db · $percent% · ${"%.1f".format(copiedMb)}/${"%.1f".format(totalMb)} MB"
+        } else {
+            "正在导入 fenbi.db · 已复制 ${"%.1f".format(copiedMb)} MB"
         }
     }
 

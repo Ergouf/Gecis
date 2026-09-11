@@ -11,6 +11,7 @@ import java.io.BufferedWriter
 import java.io.File
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
+import java.util.ArrayDeque
 import java.util.concurrent.Executors
 
 /** Owns one long-lived authenticated Antigravity headless process. */
@@ -26,6 +27,8 @@ class AntigravityRuntime(
     private var writer: BufferedWriter? = null
     private var pending: Pending? = null
     private var closed = false
+    private var runtimeNetworkSummary = "网络状态未知"
+    private val stderrTail = ArrayDeque<String>()
 
     override fun send(requestId: String, text: String, listener: ChatRuntime.Listener) {
         if (text.isBlank()) {
@@ -74,7 +77,7 @@ class AntigravityRuntime(
                 deliverError(
                     active?.listener ?: listener,
                     active?.requestId ?: requestId,
-                    error.message ?: "无法启动 AI runtime",
+                    buildFailureMessage(error.message ?: "无法启动 AI runtime"),
                 )
             }
         }
@@ -84,8 +87,12 @@ class AntigravityRuntime(
         if (process?.isAlive == true && writer != null) return
 
         resetProcessLocked()
+        stderrTail.clear()
         val spec = NativeRuntimeSpec.resolve(context)
         val home = AntigravityEnvironment.prepareHome(context)
+        val network = RuntimeNetworkEnvironment.prepare(context)
+        runtimeNetworkSummary = network.summary
+
         val builder = ProcessBuilder(spec.headlessCommand())
             .directory(context.noBackupFilesDir)
             .redirectErrorStream(false)
@@ -93,7 +100,8 @@ class AntigravityRuntime(
         builder.environment().apply {
             remove("LD_PRELOAD")
             remove("LD_LIBRARY_PATH")
-            putAll(AntigravityEnvironment.baseEnvironment(context, home))
+            putAll(AntigravityEnvironment.baseEnvironment(context, home, network))
+            putAll(network.proxyEnvironment)
             // v1.2.0 exposes this credential entry point directly. Keep the OAuth JSON out of
             // WebView/state files and inject it only into the child process environment.
             put("JETSKI_OAUTH_TOKEN", oauthCredential)
@@ -122,11 +130,19 @@ class AntigravityRuntime(
                 if (process !== owner) return@synchronized null
                 val value = pending
                 pending = null
-                resetProcessLocked()
                 value
             }
-            active?.let {
-                deliverError(it.listener, it.requestId, "AI runtime 已退出，请重试")
+            if (active != null) {
+                val exitCode = runCatching { owner.waitFor() }.getOrNull()
+                val message = if (exitCode != null) {
+                    "AI runtime 已退出（exit=$exitCode）"
+                } else {
+                    "AI runtime 输出流已关闭"
+                }
+                deliverError(active.listener, active.requestId, buildFailureMessage(message))
+            }
+            synchronized(lock) {
+                if (process === owner) resetProcessLocked()
             }
         }
     }
@@ -135,6 +151,7 @@ class AntigravityRuntime(
         try {
             BufferedReader(InputStreamReader(owner.errorStream, Charsets.UTF_8)).useLines { lines ->
                 lines.forEach { line ->
+                    rememberStderr(line)
                     Log.w(TAG, "agy: $line")
                     if (isAuthenticationRequired(line)) {
                         handleAuthenticationRequired(owner)
@@ -144,6 +161,27 @@ class AntigravityRuntime(
         } catch (error: Throwable) {
             if (owner.isAlive) Log.w(TAG, "Antigravity stderr reader failed", error)
         }
+    }
+
+    private fun rememberStderr(line: String) {
+        synchronized(lock) {
+            val sanitized = line.trim().take(MAX_STDERR_LINE_CHARS)
+            if (sanitized.isBlank()) return
+            stderrTail.addLast(sanitized)
+            while (stderrTail.size > STDERR_TAIL_LINES) stderrTail.removeFirst()
+        }
+    }
+
+    private fun buildFailureMessage(base: String): String {
+        val diagnostics = synchronized(lock) {
+            val stderr = stderrTail.joinToString(" | ")
+            buildString {
+                append(base)
+                append("\n网络：").append(runtimeNetworkSummary)
+                if (stderr.isNotBlank()) append("\n运行时：").append(stderr)
+            }
+        }
+        return diagnostics
     }
 
     private fun handleAuthenticationRequired(owner: Process) {
@@ -204,7 +242,7 @@ class AntigravityRuntime(
                     deliverError(
                         active.listener,
                         active.requestId,
-                        errorText.ifBlank { "AI runtime 返回状态：$status" },
+                        buildFailureMessage(errorText.ifBlank { "AI runtime 返回状态：$status" }),
                     )
                 } else {
                     val finalText = response.ifBlank { active.buffer.toString() }
@@ -252,6 +290,8 @@ class AntigravityRuntime(
 
     companion object {
         private const val TAG = "GecisRuntime"
+        private const val STDERR_TAIL_LINES = 6
+        private const val MAX_STDERR_LINE_CHARS = 240
         private val TERMINAL_ERRORS = setOf("ERROR", "CANCELED", "INTERRUPTED", "INVALID")
         private val AUTH_ERRORS = listOf(
             "authentication required",
@@ -309,9 +349,12 @@ internal object AntigravityEnvironment {
         tokenFiles(context).forEach { it.delete() }
     }
 
-    fun baseEnvironment(context: Context, home: File = prepareHome(context)): Map<String, String> {
+    fun baseEnvironment(
+        context: Context,
+        home: File = prepareHome(context),
+        network: RuntimeNetworkEnvironment.Prepared = RuntimeNetworkEnvironment.prepare(context),
+    ): Map<String, String> {
         val appData = File(home, ".gemini/antigravity-cli").apply { mkdirs() }
-        val network = RuntimeNetworkEnvironment.prepare(context)
         return mapOf(
             "HOME" to home.absolutePath,
             "TMPDIR" to context.cacheDir.absolutePath,

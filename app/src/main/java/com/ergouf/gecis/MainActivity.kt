@@ -3,6 +3,7 @@ package com.ergouf.gecis
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.webkit.JavascriptInterface
@@ -13,7 +14,12 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
 import com.ergouf.gecis.auth.OAuthTokenVault
@@ -37,6 +43,8 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private var pendingAfterDatabase: PendingMessage? = null
     private var pendingAfterAuth: PendingMessage? = null
     private var inflight: PendingMessage? = null
+    private var lastInsets = Insets.NONE
+    private var lastImeBottom = 0
 
     private val openFenbiDatabase = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val pending = pendingAfterDatabase ?: return@registerForActivityResult
@@ -80,6 +88,10 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+        )
         super.onCreate(savedInstanceState)
         tokenVault = OAuthTokenVault(applicationContext)
         knowledgeBase = FenbiKnowledgeBase(applicationContext)
@@ -94,6 +106,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             .build()
 
         webView = WebView(this).apply {
+            setBackgroundColor(Color.TRANSPARENT)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = false
             settings.allowFileAccess = false
@@ -126,12 +139,31 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                     }
                     return blockedResource()
                 }
+
+                override fun onPageFinished(view: WebView, url: String) {
+                    super.onPageFinished(view, url)
+                    emitInsets()
+                }
             }
             addJavascriptInterface(GecisBridge(), "GecisNative")
             loadUrl(APP_URL)
         }
 
+        ViewCompat.setOnApplyWindowInsetsListener(webView) { _, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.statusBars() or
+                    WindowInsetsCompat.Type.navigationBars() or
+                    WindowInsetsCompat.Type.displayCutout(),
+            )
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            lastInsets = bars
+            lastImeBottom = ime.bottom
+            emitInsets()
+            insets
+        }
+
         setContentView(webView)
+        ViewCompat.requestApplyInsets(webView)
     }
 
     override fun onDestroy() {
@@ -267,6 +299,23 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                 .toString()
             webView.evaluateJavascript(
                 "window.GecisChat && window.GecisChat.onStatus($payload);",
+                null,
+            )
+        }
+    }
+
+    private fun emitInsets() {
+        if (!::webView.isInitialized) return
+        val payload = JSONObject()
+            .put("top", lastInsets.top)
+            .put("right", lastInsets.right)
+            .put("bottom", lastInsets.bottom)
+            .put("left", lastInsets.left)
+            .put("imeBottom", lastImeBottom)
+            .toString()
+        webView.post {
+            webView.evaluateJavascript(
+                "window.GecisChat && window.GecisChat.onInsets($payload);",
                 null,
             )
         }

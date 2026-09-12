@@ -5,30 +5,70 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Bold G / speech-bubble monogram. Kept inside the adaptive-icon safe zone. -->
+    <!-- Ambient warm glow in safe zone -->
     <path
-        android:pathData="M73,35 C68,29 61,26 53,26 C37,26 25,38 25,54 C25,70 37,82 53,82 C65,82 74,76 79,68"
-        android:fillColor="@android:color/transparent"
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="10"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round" />
+        android:pathData="M54,24 A30,30 0 1,0 54,84 A30,30 0 1,0 54,24"
+        android:fillColor="#15FF7A38" />
 
+    <!-- Left Ear Outer (Terracotta) -->
     <path
-        android:pathData="M55,54 L81,54 L81,70"
-        android:fillColor="@android:color/transparent"
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="10"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round" />
+        android:pathData="M54,39 L29,23 C27,37 30,52 35,59 Z"
+        android:fillColor="#FF7A38" />
 
-    <!-- Small dialogue tail: the mark reads as both a G and a chat bubble. -->
+    <!-- Right Ear Outer (Terracotta) -->
     <path
-        android:pathData="M34,78 L29,89 L43,82 Z"
+        android:pathData="M54,39 L79,23 C81,37 78,52 73,59 Z"
+        android:fillColor="#FF8845" />
+
+    <!-- Left Ear Inner Fluff (Soft Cream) -->
+    <path
+        android:pathData="M49,42 L34,29 C34,38 36,47 40,53 Z"
+        android:fillColor="#FFF0DF" />
+
+    <!-- Right Ear Inner Fluff (Soft Cream) -->
+    <path
+        android:pathData="M59,42 L74,29 C74,38 72,47 68,53 Z"
+        android:fillColor="#FFF6EB" />
+
+    <!-- Forehead Left Plane -->
+    <path
+        android:pathData="M54,39 L35,59 L54,53 Z"
+        android:fillColor="#FF6E2B" />
+
+    <!-- Forehead Right Plane -->
+    <path
+        android:pathData="M54,39 L73,59 L54,53 Z"
+        android:fillColor="#FF8544" />
+
+    <!-- Nose Bridge Muzzle -->
+    <path
+        android:pathData="M54,53 L49,69 L54,72 L59,69 Z"
+        android:fillColor="#EA580C" />
+
+    <!-- Left Cheek (Cream White) -->
+    <path
+        android:pathData="M35,59 C25,64 30,76 54,84 L54,72 L49,69 C44,65 39,61 35,59 Z"
+        android:fillColor="#FDFBF7" />
+
+    <!-- Right Cheek (Cream White) -->
+    <path
+        android:pathData="M73,59 C83,64 78,76 54,84 L54,72 L59,69 C64,65 69,61 73,59 Z"
         android:fillColor="#FFFFFF" />
 
-    <!-- Tiny idea/spark accent. -->
+    <!-- Serene Curved Eyes (Natural Zen Crescent Arcs) -->
     <path
-        android:pathData="M82,27 L84.4,33.1 L91,35.5 L84.4,37.9 L82,44 L79.6,37.9 L73,35.5 L79.6,33.1 Z"
-        android:fillColor="#F5EAD4" />
+        android:pathData="M39,60 C42,65 47,65 49,61"
+        android:strokeColor="#1C1917"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M69,60 C66,65 61,65 59,61"
+        android:strokeColor="#1C1917"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round" />
+
+    <!-- Cute Button Nose -->
+    <path
+        android:pathData="M50.2,71.5 C50.2,70.1 57.8,70.1 57.8,71.5 C57.8,72.9 50.2,72.9 50.2,71.5 Z"
+        android:fillColor="#1C1917" />
 </vector>

@@ -111,13 +111,23 @@ function replaceConversation(snapshot){
 function applySnapshot(raw,replace=false){try{const snapshot=parseNativeSnapshot(raw);renderProjectList(snapshot);if(replace)replaceConversation(snapshot);return snapshot;}catch(err){setStatus('历史记录读取失败','error');console.error(err);return null;}}
 function newConversation(projectId){if(active){setStatus('请等待当前回答完成','error');return;}try{const raw=window.GecisNative.newConversation(Number(projectId));applySnapshot(raw,true);closeDrawer();setStatus('新对话','idle');}catch(err){setStatus(err.message||'无法新建对话','error');}}
 function openConversation(conversationId){if(active){setStatus('请等待当前回答完成','error');return;}try{const raw=window.GecisNative.openConversation(Number(conversationId));applySnapshot(raw,true);closeDrawer();setStatus('已打开历史对话','idle');}catch(err){setStatus(err.message||'无法打开历史对话','error');}}
-function createProject(){const name=prompt('项目名称');if(name==null)return;const value=name.trim();if(!value)return;try{const raw=window.GecisNative.createProject(value);const snapshot=applySnapshot(raw,true);if(snapshot?.currentProjectId)newConversation(snapshot.currentProjectId);}catch(err){setStatus(err.message||'无法新建项目','error');}}
+function createProject(){if(active){setStatus('请等待当前回答完成','error');return;}const name=prompt('项目名称');if(name==null)return;const value=name.trim();if(!value)return;try{const raw=window.GecisNative.createProject(value);const snapshot=applySnapshot(raw,true);if(snapshot?.currentProjectId)newConversation(snapshot.currentProjectId);}catch(err){setStatus(err.message||'无法新建项目','error');}}
 
 window.GecisChat={
   onStatus(event){if(event)setStatus(event.text,event.state||'idle');},
-  onHistory(snapshot){renderProjectList(snapshot);if(!historyInitialized){historyInitialized=true;replaceConversation(snapshot);}},
+  onHistory(snapshot){renderProjectList(snapshot);if(!historyInitialized){historyInitialized=true;if(!active)replaceConversation(snapshot);}},
+  onResumeTurn(event){
+    if(!event?.requestId||active)return;
+    const lastUser=[...messages.querySelectorAll('.message.user .bubble')].pop();
+    if(!lastUser||lastUser.textContent!==event.text)addMessage('user',event.text||'');
+    beginAssistant(event.requestId);
+    send.disabled=true;
+  },
   onNativeEvent(event){
-    if(!active||event.requestId!==active.requestId)return;
+    if(!active||event.requestId!==active.requestId){
+      if(!active&&(event.type==='complete'||event.type==='error'))finish();
+      return;
+    }
     if(event.type==='delta'){active.text+=event.text;renderAssistant(active.bubble,active.text);window.scrollTo({top:document.body.scrollHeight});return;}
     active.row.classList.remove('pending');
     if(event.type==='complete'){active.text=event.text||active.text;renderAssistant(active.bubble,active.text);}else if(event.type==='error'){active.text='发生错误：'+event.text;renderAssistant(active.bubble,active.text);}

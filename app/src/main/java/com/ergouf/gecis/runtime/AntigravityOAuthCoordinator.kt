@@ -1,5 +1,6 @@
 package com.ergouf.gecis.runtime
 
+import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -23,8 +24,10 @@ import javax.net.ssl.HttpsURLConnection
  * Runs Antigravity-compatible Google OAuth natively on Android.
  */
 class AntigravityOAuthCoordinator(
+    appContext: Context,
     private val tokenVault: OAuthTokenVault,
 ) : AutoCloseable {
+    private val appContext = appContext.applicationContext
     interface Listener {
         fun onAuthorizationUrl(url: String)
         fun onAuthenticated()
@@ -40,14 +43,26 @@ class AntigravityOAuthCoordinator(
     private var cancelled = false
     private var active = false
 
+    fun isRunning(): Boolean = synchronized(lock) { active && !closed }
+
+    fun setListener(listener: Listener?) {
+        synchronized(lock) { this.listener = listener }
+    }
+
     fun start(listener: Listener) {
-        synchronized(lock) {
+        val alreadyActive = synchronized(lock) {
             check(!closed) { "OAuth coordinator 已关闭" }
-            if (active) return
-            active = true
             this.listener = listener
-            cancelled = false
+            if (active) {
+                true
+            } else {
+                active = true
+                cancelled = false
+                false
+            }
         }
+        runCatching { OAuthSessionService.start(appContext) }
+        if (alreadyActive) return
 
         io.execute {
             var server: ServerSocket? = null
@@ -81,6 +96,7 @@ class AntigravityOAuthCoordinator(
 
                 val credential = exchangeCode(code, verifier)
                 tokenVault.save(credential.toString())
+                OAuthSessionService.bringAppToFront(appContext)
                 main.post { this.listener?.onAuthenticated() }
             } catch (error: Throwable) {
                 if (!cancelled && !closed) {
@@ -89,6 +105,7 @@ class AntigravityOAuthCoordinator(
                         is java.net.SocketTimeoutException -> "Google 登录超时，请重新发起登录"
                         else -> error.message ?: "Google 登录失败"
                     }
+                    OAuthSessionService.stop(appContext)
                     main.post { this.listener?.onError(message) }
                 }
             } finally {
@@ -97,6 +114,7 @@ class AntigravityOAuthCoordinator(
                     if (serverSocket === server) serverSocket = null
                     active = false
                 }
+                if (cancelled || closed) OAuthSessionService.stop(appContext)
             }
         }
     }
@@ -109,6 +127,7 @@ class AntigravityOAuthCoordinator(
             serverSocket = null
             active = false
         }
+        OAuthSessionService.stop(appContext)
     }
 
     private fun buildAuthorizationUrl(state: String, challenge: String): String =
@@ -199,23 +218,34 @@ class AntigravityOAuthCoordinator(
             <head>
               <meta charset="utf-8">
               <meta name="viewport" content="width=device-width,initial-scale=1">
+              <meta http-equiv="refresh" content="0;url=$APP_RETURN_INTENT_URI">
               <title>返回 Gecis</title>
               <style>
                 body{font-family:system-ui,sans-serif;margin:0;min-height:100vh;display:grid;place-items:center;background:#f7f7f5;color:#171717}
-                main{padding:32px;text-align:center}a{display:inline-block;margin-top:18px;padding:12px 18px;border-radius:22px;background:#171717;color:white;text-decoration:none}
+                main{padding:32px 24px;text-align:center;max-width:22rem}
+                p{color:#555;line-height:1.55}
+                a{display:inline-block;margin-top:18px;padding:14px 22px;border-radius:22px;background:#171717;color:white;text-decoration:none;font-weight:650}
               </style>
             </head>
             <body>
               <main>
                 <h2>Google 授权已完成</h2>
-                <p>正在返回 Gecis…</p>
-                <a href="$APP_RETURN_URI">返回 Gecis</a>
+                <p>Brave、Chrome 等浏览器通常不会自动跳转。请点下面的按钮返回 Gecis，或点通知栏里的「返回 Gecis」。</p>
+                <a id="return" href="$APP_RETURN_INTENT_URI">返回 Gecis</a>
               </main>
               <script>
-                const appUri = '$APP_RETURN_URI';
-                const intentUri = '$APP_RETURN_INTENT_URI';
-                setTimeout(() => { window.location.href = intentUri; }, 80);
-                setTimeout(() => { window.location.href = appUri; }, 650);
+                const urls = [
+                  '$APP_RETURN_INTENT_URI',
+                  '$APP_RETURN_URI',
+                  '$APP_LAUNCHER_INTENT_URI'
+                ];
+                function go(i) {
+                  if (i >= urls.length) return;
+                  try { window.location.href = urls[i]; } catch (e) {}
+                  setTimeout(() => go(i + 1), 450);
+                }
+                document.getElementById('return').addEventListener('click', () => setTimeout(() => go(0), 0));
+                go(0);
               </script>
             </body>
             </html>
@@ -310,7 +340,10 @@ class AntigravityOAuthCoordinator(
         private const val CALLBACK_PATH = "/oauth-callback"
         private const val REDIRECT_URI = "http://localhost:51121/oauth-callback"
         private const val APP_RETURN_URI = "gecis://oauth-complete"
-        private const val APP_RETURN_INTENT_URI = "intent://oauth-complete#Intent;scheme=gecis;package=com.ergouf.gecis;end"
+        private const val APP_RETURN_INTENT_URI =
+            "intent://oauth-complete#Intent;scheme=gecis;package=com.ergouf.gecis;action=android.intent.action.VIEW;launchFlags=0x30000000;end"
+        private const val APP_LAUNCHER_INTENT_URI =
+            "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=com.ergouf.gecis;launchFlags=0x10000000;end"
         private const val AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
         private const val TOKEN_URL = "https://oauth2.googleapis.com/token"
         private const val CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"

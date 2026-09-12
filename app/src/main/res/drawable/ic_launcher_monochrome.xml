@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Abstract Little Fox Head Silhouette for Android 13+ / iOS 18 Tinted Icons -->
+    <path
+        android:pathData="M54,39 L29,23 C27,37 30,52 35,59 C25,64 30,76 54,84 C78,76 83,64 73,59 C78,52 81,37 79,23 Z"
+        android:fillColor="#FFFFFF" />
+    <path
+        android:pathData="M39,60 C42,65 47,65 49,61"
+        android:strokeColor="#000000"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M69,60 C66,65 61,65 59,61"
+        android:strokeColor="#000000"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M50.2,71.5 C50.2,70.1 57.8,70.1 57.8,71.5 C57.8,72.9 50.2,72.9 50.2,71.5 Z"
+        android:fillColor="#000000" />
+</vector>

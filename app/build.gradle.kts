@@ -6,12 +6,13 @@ plugins {
 android {
     namespace = "com.ergouf.gecis"
     compileSdk = 35
+    buildToolsVersion = "35.0.0"
 
     defaultConfig {
         applicationId = "com.ergouf.gecis"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
+        versionCode = 6
         versionName = "0.1.0"
 
         ndk {
@@ -30,6 +31,32 @@ android {
 
     buildFeatures {
         buildConfig = true
+    }
+
+    val releaseStoreFile = file(project.findProperty("storeFile") as? String ?: "${rootDir}/release.keystore")
+    signingConfigs {
+        create("release") {
+            storeFile = releaseStoreFile
+            storePassword = project.findProperty("storePassword") as? String ?: "gecis123"
+            keyAlias = project.findProperty("keyAlias") as? String ?: "gecis"
+            keyPassword = project.findProperty("keyPassword") as? String ?: "gecis123"
+            enableV1Signing = true
+            enableV2Signing = true
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            if (releaseStoreFile.isFile) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+        debug {
+            if (releaseStoreFile.isFile) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     packaging {

@@ -12,12 +12,12 @@ commits: 654ee66bd0c8669cac56720503b80ef8ab418b54..HEAD
 
 **What was built** — Gecis Windows 桌面子项目：Tauri 2 + WebView2 壳，复用 Android 聊天交互契约，本地 SQLite 历史、官方 `agy` headless NDJSON 流式对话。fenbi 检索改为 **MCP 工具 `search_fenbi`，由模型自行决定是否调用、搜什么关键词**；程序不再预检索/注入 `<fenbi_context>`。Android 同步：内置 HTTP MCP，启动前写入私有 HOME 的 `mcp_config.json`。
 
-**Verification** — `cargo check` PASS；`cargo run --bin e2e_chat -- "只回复两个字：收到"` → `E2E OK / 收到`；`npm run build` PASS（NSIS/MSI）。
+**Verification** — `cargo check` PASS；`cargo run --bin e2e_chat` runtime 层 PASS；**真 E2E `npm run e2e`（WebdriverIO + tauri-driver 驱动 `gecis-windows.exe` UI）PASS，助手气泡显示「收到」**；`npm run build` PASS（NSIS/MSI）。
 
 **Journey log**
 - stream-json 实际字段是 `conversation_id` + `text_delta` + `result.status=SUCCESS`，不是 request_id。
 - 「模型决定搜索」→ MCP `search_fenbi`，两端去掉 KnowledgeAugmentingRuntime 预注入。
-- Windows e2e 走与应用相同的 spawn/parser 路径才算数。
+- `e2e_chat` 只是 runtime 冒烟，不算 E2E；真 E2E 必须启动桌面二进制并断言 UI 气泡。
 
 ## [S1] Problem
 

@@ -49,12 +49,21 @@ npm run build
 
 ## e2e
 
+真端到端（启动 GUI、驱动输入框、断言助手气泡）：
+
 ```powershell
-cd windows/src-tauri
-cargo run --bin e2e_chat -- "只回复两个字：收到"
+cd windows
+npm install
+npm run e2e
 ```
 
-成功时输出 `E2E OK` 与模型回复。
+通过时输出 `E2E reply: …` 与 `1 passing`。依赖本机 `tauri-driver` 与 Edge WebView2。
+
+Runtime 层冒烟（非 UI）：
+
+```powershell
+npm run e2e:runtime
+```
 
 ## 目录
 

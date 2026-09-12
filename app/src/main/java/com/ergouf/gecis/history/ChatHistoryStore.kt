@@ -40,6 +40,7 @@ class ChatHistoryStore(context: Context) : SQLiteOpenHelper(
               title TEXT NOT NULL,
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL,
+              agy_conversation_id TEXT,
               FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
             )
             """.trimIndent(),
@@ -62,7 +63,54 @@ class ChatHistoryStore(context: Context) : SQLiteOpenHelper(
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Version 1 is the initial local history schema. Future versions must migrate in place.
+        if (oldVersion < 2) {
+            runCatching {
+                db.execSQL("ALTER TABLE conversations ADD COLUMN agy_conversation_id TEXT")
+            }
+        }
+    }
+
+    @Synchronized
+    fun setAgyConversationId(conversationId: Long, agyId: String) {
+        if (agyId.isBlank()) return
+        writableDatabase.execSQL(
+            "UPDATE conversations SET agy_conversation_id=? WHERE id=?",
+            arrayOf(agyId.trim(), conversationId),
+        )
+    }
+
+    @Synchronized
+    fun getAgyConversationId(conversationId: Long): String? {
+        return readableDatabase.rawQuery(
+            "SELECT agy_conversation_id FROM conversations WHERE id=?",
+            arrayOf(conversationId.toString()),
+        ).use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0)?.takeIf { it.isNotBlank() } else null
+        }
+    }
+
+    @Synchronized
+    fun conversationTitle(conversationId: Long): String {
+        return readableDatabase.rawQuery(
+            "SELECT title FROM conversations WHERE id=?",
+            arrayOf(conversationId.toString()),
+        ).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else "会话"
+        }
+    }
+
+    @Synchronized
+    fun listMessages(conversationId: Long): List<Pair<String, String>> {
+        return readableDatabase.rawQuery(
+            "SELECT role, content FROM messages WHERE conversation_id=? ORDER BY id ASC",
+            arrayOf(conversationId.toString()),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(cursor.getString(0) to cursor.getString(1))
+                }
+            }
+        }
     }
 
     @Synchronized
@@ -270,7 +318,7 @@ class ChatHistoryStore(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "gecis_history.db"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
         private const val DEFAULT_PROJECT_NAME = "未分类"
         private const val DEFAULT_CONVERSATION_TITLE = "新对话"
         private const val MAX_PROJECT_NAME = 40

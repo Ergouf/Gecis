@@ -11,6 +11,7 @@ pub enum RuntimeEvent {
     Complete { request_id: String, text: String },
     Error { request_id: String, message: String },
     AuthRequired { request_id: String },
+    ConversationId { id: String },
 }
 
 pub struct AgyLocator {
@@ -89,6 +90,10 @@ pub struct AntigravityRuntime {
 
 impl AntigravityRuntime {
     pub fn spawn() -> Result<Self, String> {
+        Self::spawn_with_conversation(None)
+    }
+
+    pub fn spawn_with_conversation(resume_id: Option<&str>) -> Result<Self, String> {
         let locator = locate_agy()?;
         let workdir = app_data_dir().unwrap_or_else(std::env::temp_dir);
         let _ = std::fs::create_dir_all(&workdir);
@@ -96,16 +101,21 @@ impl AntigravityRuntime {
         write_agent_instructions(&workdir)?;
 
         let mut command = Command::new(&locator.path);
+        let mut args = vec![
+            "--input-format".to_string(),
+            "stream-json".to_string(),
+            "--output-format".to_string(),
+            "stream-json".to_string(),
+            "--sandbox".to_string(),
+            "--print-timeout".to_string(),
+            "5m".to_string(),
+        ];
+        if let Some(id) = resume_id.map(str::trim).filter(|s| !s.is_empty()) {
+            args.push("--conversation".into());
+            args.push(id.to_string());
+        }
         command
-            .args([
-                "--input-format",
-                "stream-json",
-                "--output-format",
-                "stream-json",
-                "--sandbox",
-                "--print-timeout",
-                "5m",
-            ])
+            .args(&args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -200,6 +210,9 @@ impl AntigravityRuntime {
                 RuntimeEvent::Status { text, state } => {
                     out.push(RuntimeEvent::Status { text, state });
                 }
+                RuntimeEvent::ConversationId { id } => {
+                    out.push(RuntimeEvent::ConversationId { id });
+                }
             }
         }
         if self.pending.is_some() {
@@ -261,6 +274,16 @@ fn spawn_stdout_reader(stdout: std::process::ChildStdout, tx: Sender<RuntimeEven
                 continue;
             };
             match event.get("event").and_then(|v| v.as_str()) {
+                Some("init") => {
+                    let id = event
+                        .get("conversation_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if !id.is_empty() {
+                        let _ = tx.send(RuntimeEvent::ConversationId { id });
+                    }
+                }
                 Some("step_update") => {
                     let delta = event
                         .pointer("/step_update/text_delta")
@@ -275,6 +298,7 @@ fn spawn_stdout_reader(stdout: std::process::ChildStdout, tx: Sender<RuntimeEven
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
+                    // Do not adopt agy conversation_id — app correlator lives in AntigravityRuntime.pending.
                     let _ = tx.send(RuntimeEvent::Delta {
                         request_id,
                         text: delta,
@@ -297,12 +321,9 @@ fn spawn_stdout_reader(stdout: std::process::ChildStdout, tx: Sender<RuntimeEven
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let request_id = result
-                        .get("request_id")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| result.get("conversation_id").and_then(|v| v.as_str()))
-                        .unwrap_or("")
-                        .to_string();
+                    // Always leave request_id empty: stdout reader does not know the app request id.
+                    // pump_runtime_events substitutes the in-flight request id.
+                    let request_id = String::new();
                     if is_auth_required(&error_text) {
                         let _ = tx.send(RuntimeEvent::AuthRequired { request_id });
                     } else if !error_text.is_empty()
@@ -515,6 +536,7 @@ pub fn e2e_chat_once(prompt: &str, timeout: std::time::Duration) -> Result<Strin
                     return Err("auth required".into());
                 }
                 RuntimeEvent::Status { .. } => {}
+                RuntimeEvent::ConversationId { .. } => {}
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(40));

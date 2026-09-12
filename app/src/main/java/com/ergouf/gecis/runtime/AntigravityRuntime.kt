@@ -27,6 +27,12 @@ class AntigravityRuntime(
     private val lock = Any()
     private var mcpServer: FenbiMcpHttpServer? = null
 
+    /** When set, next process spawn resumes this agy conversation. */
+    @Volatile var resumeConversationId: String? = null
+
+    /** Called when agy reports a conversation id (init event). */
+    @Volatile var onConversationId: ((String) -> Unit)? = null
+
     private var process: Process? = null
     private var writer: BufferedWriter? = null
     private var pending: Pending? = null
@@ -109,7 +115,7 @@ class AntigravityRuntime(
         // inside the app-private sandbox while agy is starting/refeshing its session.
         AntigravityEnvironment.materializeOAuthToken(context, oauthCredential)
 
-        val builder = ProcessBuilder(spec.headlessCommand())
+        val builder = ProcessBuilder(spec.headlessCommand(resumeConversationId))
             .directory(context.noBackupFilesDir)
             .redirectErrorStream(false)
 
@@ -246,6 +252,12 @@ class AntigravityRuntime(
         }
 
         when (event.optString("event")) {
+            "init" -> {
+                val id = event.optString("conversation_id")
+                if (id.isNotBlank()) {
+                    mainHandler.post { onConversationId?.invoke(id) }
+                }
+            }
             "step_update" -> {
                 captureRuntimeCredentialAndClear()
                 val delta = event.optJSONObject("step_update")?.optString("text_delta").orEmpty()
@@ -466,15 +478,19 @@ internal data class NativeRuntimeSpec(
     val nativeDir: File,
     val runtimeLibDir: File,
 ) {
-    fun headlessCommand(): List<String> = baseCommand() + listOf(
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--sandbox",
-        "--print-timeout",
-        "5m",
-    )
+    fun headlessCommand(resumeId: String? = null): List<String> {
+        val base = baseCommand() + listOf(
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--sandbox",
+            "--print-timeout",
+            "5m",
+        )
+        val id = resumeId?.trim().orEmpty()
+        return if (id.isNotEmpty()) base + listOf("--conversation", id) else base
+    }
 
     fun interactiveCommand(): List<String> = baseCommand()
 

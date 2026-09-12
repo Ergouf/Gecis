@@ -45,7 +45,86 @@ impl HistoryStore {
             "#,
         )
         .map_err(|e| e.to_string())?;
+        // Migration: bind local conversations to agy conversation ids for copy/resume.
+        let has_col: bool = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(conversations)")
+                .map_err(|e| e.to_string())?;
+            let cols = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok())
+                .collect::<Vec<_>>();
+            cols.iter().any(|c| c == "agy_conversation_id")
+        };
+        if !has_col {
+            conn.execute_batch("ALTER TABLE conversations ADD COLUMN agy_conversation_id TEXT;")
+                .map_err(|e| e.to_string())?;
+        }
         Ok(Self { conn })
+    }
+
+    pub fn set_agy_conversation_id(
+        &self,
+        conversation_id: i64,
+        agy_id: &str,
+    ) -> Result<(), String> {
+        if agy_id.trim().is_empty() {
+            return Ok(());
+        }
+        self.conn
+            .execute(
+                "UPDATE conversations SET agy_conversation_id=? WHERE id=?",
+                params![agy_id.trim(), conversation_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn get_agy_conversation_id(&self, conversation_id: i64) -> Result<Option<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT agy_conversation_id FROM conversations WHERE id=?")
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt.query(params![conversation_id]).map_err(|e| e.to_string())?;
+        if let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let value: Option<String> = row.get(0).map_err(|e| e.to_string())?;
+            Ok(value.filter(|s| !s.trim().is_empty()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn conversation_title(&self, conversation_id: i64) -> Result<String, String> {
+        self.conn
+            .query_row(
+                "SELECT title FROM conversations WHERE id=?",
+                params![conversation_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn list_messages(
+        &self,
+        conversation_id: i64,
+    ) -> Result<Vec<(String, String)>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT role, content FROM messages WHERE conversation_id=? ORDER BY id ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![conversation_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut out = vec![];
+        for row in rows {
+            out.push(row.map_err(|e| e.to_string())?);
+        }
+        Ok(out)
     }
 
     pub fn ensure_default_project(&self) -> Result<i64, String> {

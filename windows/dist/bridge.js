@@ -43,6 +43,12 @@
     importFenbi() {
       return invoke('import_fenbi');
     },
+    getConversationId() {
+      return invoke('get_conversation_id');
+    },
+    exportConversation(format) {
+      return invoke('export_conversation', { format });
+    },
   };
 
   window.GecisBridgeReady = (async () => {

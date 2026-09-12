@@ -81,6 +81,9 @@ pub fn new_conversation(app: AppHandle, project_id: Option<i64>) -> Result<Strin
     drop(history);
     *state.current_project.lock().map_err(|e| e.to_string())? = Some(resolved_project);
     *state.current_conversation.lock().map_err(|e| e.to_string())? = Some(conversation_id);
+    if let Ok(mut slot) = state.runtime.lock() {
+        *slot = None;
+    }
     let history = state.history.lock().map_err(|e| e.to_string())?;
     Ok(history.snapshot(Some(conversation_id))?.to_string())
 }
@@ -96,8 +99,230 @@ pub fn open_conversation(app: AppHandle, conversation_id: i64) -> Result<String,
         }
     }
     *state.current_conversation.lock().map_err(|e| e.to_string())? = Some(conversation_id);
+    if let Ok(mut slot) = state.runtime.lock() {
+        *slot = None;
+    }
     let history = state.history.lock().map_err(|e| e.to_string())?;
     Ok(history.snapshot(Some(conversation_id))?.to_string())
+}
+
+#[tauri::command]
+pub fn get_conversation_id(app: AppHandle) -> Result<Value, String> {
+    let state = app.state::<AppState>();
+    let conversation = *state.current_conversation.lock().map_err(|e| e.to_string())?;
+    let Some(local_id) = conversation else {
+        return Ok(json!({"localId": null, "agyConversationId": null}));
+    };
+    let history = state.history.lock().map_err(|e| e.to_string())?;
+    let agy = history.get_agy_conversation_id(local_id)?;
+    let title = history.conversation_title(local_id)?;
+    Ok(json!({
+        "localId": local_id,
+        "title": title,
+        "agyConversationId": agy,
+    }))
+}
+
+#[tauri::command]
+pub async fn export_conversation(app: AppHandle, format: String) -> Result<String, String> {
+    let app2 = app.clone();
+    let format2 = format.clone();
+    // blocking_save_file must not run on the async runtime thread — use a worker.
+    tauri::async_runtime::spawn_blocking(move || export_conversation_blocking(app2, format2))
+        .await
+        .map_err(|e| format!("导出任务失败: {e}"))?
+}
+
+fn export_conversation_blocking(app: AppHandle, format: String) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let conversation = *state.current_conversation.lock().map_err(|e| e.to_string())?;
+    let Some(local_id) = conversation else {
+        return Err("当前没有打开的会话".into());
+    };
+    let (title, messages, agy_id) = {
+        let history = state.history.lock().map_err(|e| e.to_string())?;
+        (
+            history.conversation_title(local_id)?,
+            history.list_messages(local_id)?,
+            history.get_agy_conversation_id(local_id)?,
+        )
+    };
+
+    let ext = match format.as_str() {
+        "md" | "markdown" => "md",
+        "html" => "html",
+        other => return Err(format!("不支持的导出格式：{other}")),
+    };
+    let default_name = format!("Gecis-{}-{}.{ext}", sanitize_filename(&title), local_id);
+
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("导出会话")
+        .set_file_name(&default_name)
+        .blocking_save_file();
+    let Some(path_buf) = picked.and_then(|p| p.into_path().ok()) else {
+        return Ok("cancelled".into());
+    };
+
+    let body = if ext == "md" {
+        render_markdown_export(&title, local_id, agy_id.as_deref(), &messages)
+    } else {
+        render_html_export(&title, local_id, agy_id.as_deref(), &messages)
+    };
+    std::fs::write(&path_buf, body).map_err(|e| format!("写入失败: {e}"))?;
+    emit_status(&app, &format!("已导出 {}", path_buf.display()), "success");
+    Ok(path_buf.display().to_string())
+}
+
+fn sanitize_filename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim().to_string();
+    if trimmed.is_empty() {
+        "会话".into()
+    } else {
+        trimmed.chars().take(40).collect()
+    }
+}
+
+fn render_markdown_export(
+    title: &str,
+    local_id: i64,
+    agy_id: Option<&str>,
+    messages: &[(String, String)],
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("# {title}\n\n"));
+    out.push_str(&format!("- 本地会话 ID: `{local_id}`\n"));
+    if let Some(agy) = agy_id {
+        out.push_str(&format!("- Antigravity 会话 ID: `{agy}`\n"));
+        out.push_str(&format!(
+            "  - 继续对话：`agy --conversation {agy}`\n"
+        ));
+    }
+    out.push('\n');
+    for (role, content) in messages {
+        let label = if role == "user" { "用户" } else { "助手" };
+        out.push_str(&format!("## {label}\n\n"));
+        out.push_str(content.trim());
+        out.push_str("\n\n---\n\n");
+    }
+    out
+}
+
+fn render_html_export(
+    title: &str,
+    local_id: i64,
+    agy_id: Option<&str>,
+    messages: &[(String, String)],
+) -> String {
+    let mut blocks = String::new();
+    for (role, content) in messages {
+        let label = if role == "user" { "用户" } else { "助手" };
+        let class = if role == "user" { "user" } else { "assistant" };
+        let escaped = content
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;");
+        blocks.push_str(&format!(
+            r#"<section class="message {class}">
+  <div class="meta">{label}</div>
+  <div class="bubble" data-md="{escaped}"></div>
+</section>
+"#
+        ));
+    }
+    let agy_line = match agy_id {
+        Some(agy) => format!(
+            "<li>Antigravity 会话 ID：<code>{agy}</code> · 继续：<code>agy --conversation {agy}</code></li>"
+        ),
+        None => String::new(),
+    };
+    format!(
+        r##"<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>{title}</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+<style>
+  body {{ font-family: Inter, system-ui, "Segoe UI", sans-serif; background:#f7f7f5; color:#171717; margin:0; padding:32px; }}
+  main {{ max-width: 760px; margin: 0 auto; }}
+  h1 {{ letter-spacing:-.03em; }}
+  .meta {{ font-size:12px; color:#777; margin-bottom:6px; }}
+  .message {{ margin: 0 0 28px; line-height:1.72; font-size:16px; }}
+  .user .bubble {{ max-width:82%; margin-left:auto; background:#e9e9e5; border-radius:20px 20px 5px 20px; padding:12px 16px; white-space:pre-wrap; }}
+  .assistant .bubble {{ max-width:100%; }}
+  .assistant img {{ max-width:100%; border-radius:8px; }}
+  .assistant pre {{ background:#efefeb; padding:12px; border-radius:10px; overflow:auto; }}
+  .assistant code {{ font-family: Consolas, monospace; background:#ecece8; padding:.1em .3em; border-radius:4px; }}
+  .assistant pre code {{ background:transparent; padding:0; }}
+  .assistant table {{ border-collapse:collapse; width:100%; }}
+  .assistant th,.assistant td {{ border-bottom:1px solid #deded9; padding:8px 10px; text-align:left; }}
+  .katex-display {{ overflow-x:auto; }}
+  ul.ids {{ color:#555; font-size:14px; }}
+</style>
+</head>
+<body>
+<main>
+<h1>{title}</h1>
+<ul class="ids">
+<li>本地会话 ID：<code>{local_id}</code></li>
+{agy_line}
+</ul>
+{blocks}
+</main>
+<script src="https://cdn.jsdelivr.net/npm/marked@14.1.0/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+<script>
+function protectMath(source) {{
+  const expressions = [];
+  const p = 'GECISMATHTOKEN', s = 'ENDTOKEN';
+  const re = /\\$\\$[\\s\\S]*?\\$\\$|\\\\\\[[\\s\\S]*?\\\\\\]|\\\\\\([\\s\\S]*?\\\\\\)|\\$[^$\\n]+?\\$/g;
+  const text = source.replace(re, (m) => {{ expressions.push(m); return p + (expressions.length-1) + s; }});
+  return {{ text, expressions, p, s }};
+}}
+function restoreMath(html, pm) {{
+  const re = new RegExp(pm.p + '(\\\\d+)' + pm.s, 'g');
+  return html.replace(re, (_, i) => (pm.expressions[Number(i)]||'').replace(/[&<>]/g, c => ({{'&':'&amp;','<':'&lt;','>':'&gt;'}}[c])));
+}}
+function renderBubble(el) {{
+  const md = el.getAttribute('data-md') || '';
+  const pm = protectMath(md);
+  const dirty = marked.parse(pm.text, {{ gfm:true, breaks:true }});
+  const clean = DOMPurify.sanitize(dirty, {{ USE_PROFILES: {{ html:true }}, FORBID_TAGS:['iframe','object','embed','style','form','input','button','script'] }});
+  el.innerHTML = restoreMath(clean, pm);
+  if (window.renderMathInElement) {{
+    renderMathInElement(el, {{
+      delimiters:[
+        {{left:'$$',right:'$$',display:true}},
+        {{left:'\\\\[',right:'\\\\]',display:true}},
+        {{left:'$',right:'$',display:false}},
+        {{left:'\\\\(',right:'\\\\)',display:false}}
+      ],
+      ignoredTags:['script','noscript','style','textarea','pre','code','option'],
+      throwOnError:false, trust:false
+    }});
+  }}
+}}
+document.querySelectorAll('.bubble[data-md]').forEach(renderBubble);
+</script>
+</body>
+</html>
+"##
+    )
 }
 
 #[tauri::command]
@@ -176,22 +401,27 @@ pub fn install_runtime(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn import_fenbi(app: AppHandle) -> Result<String, String> {
-    let Some(path) = pick_fenbi_file(&app) else {
-        return Ok("cancelled".into());
-    };
-    let state = app.state::<AppState>();
-    let mut knowledge = state.knowledge.lock().map_err(|e| e.to_string())?;
-    match knowledge.import_from(&path) {
-        Ok(name) => {
-            emit_status(&app, &format!("{name} 导入成功"), "success");
-            Ok(name)
+pub async fn import_fenbi(app: AppHandle) -> Result<String, String> {
+    let app2 = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = pick_fenbi_file(&app2) else {
+            return Ok("cancelled".into());
+        };
+        let state = app2.state::<AppState>();
+        let mut knowledge = state.knowledge.lock().map_err(|e| e.to_string())?;
+        match knowledge.import_from(&path) {
+            Ok(name) => {
+                emit_status(&app2, &format!("{name} 导入成功"), "success");
+                Ok(name)
+            }
+            Err(err) => {
+                emit_status(&app2, &format!("导入失败：{err}"), "error");
+                Err(err)
+            }
         }
-        Err(err) => {
-            emit_status(&app, &format!("导入失败：{err}"), "error");
-            Err(err)
-        }
-    }
+    })
+    .await
+    .map_err(|e| format!("导入任务失败: {e}"))?
 }
 
 #[tauri::command]
@@ -260,7 +490,20 @@ fn handle_send(app: AppHandle, request_id: String, text: String) -> Result<(), S
         let state = app.state::<AppState>();
         let mut runtime_slot = state.runtime.lock().map_err(|e| e.to_string())?;
         if runtime_slot.is_none() {
-            match AntigravityRuntime::spawn() {
+            let resume = {
+                let conversation = *state.current_conversation.lock().map_err(|e| e.to_string())?;
+                match conversation {
+                    Some(id) => state
+                        .history
+                        .lock()
+                        .map_err(|e| e.to_string())?
+                        .get_agy_conversation_id(id)
+                        .ok()
+                        .flatten(),
+                    None => None,
+                }
+            };
+            match AntigravityRuntime::spawn_with_conversation(resume.as_deref()) {
                 Ok(runtime) => {
                     *runtime_slot = Some(runtime);
                 }
@@ -325,6 +568,7 @@ fn persist_user_message(app: &AppHandle, text: &str) -> Result<(), String> {
 }
 
 fn pick_fenbi_file(app: &AppHandle) -> Option<PathBuf> {
+    // Keep dialog off the UI/async threads; caller is already on a worker.
     let picked = app
         .dialog()
         .file()
@@ -348,6 +592,20 @@ fn pump_runtime_events(app: AppHandle, request_id: String, done_tx: Sender<()>) 
         for event in events {
             match event {
                 RuntimeEvent::Status { text, state } => emit_status(&app, &text, &state),
+                RuntimeEvent::ConversationId { id } => {
+                    let state = app.state::<AppState>();
+                    if let Ok(conversation) = state.current_conversation.lock() {
+                        if let Some(local_id) = *conversation {
+                            if let Ok(history) = state.history.lock() {
+                                let _ = history.set_agy_conversation_id(local_id, &id);
+                            }
+                        }
+                    }
+                    let _ = app.emit(
+                        "gecis://status",
+                        json!({"text": format!("会话ID已绑定"), "state": "idle"}),
+                    );
+                }
                 RuntimeEvent::Delta { request_id: rid, text } => {
                     let rid = if rid.is_empty() {
                         request_id.clone()

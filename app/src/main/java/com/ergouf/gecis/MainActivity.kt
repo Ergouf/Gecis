@@ -126,6 +126,11 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         currentProjectId = runCatching { historyStore.ensureDefaultProject() }.getOrNull()
         restorePendingState()
         runtime = AntigravityRuntime(applicationContext, tokenVault, knowledgeBase)
+        (runtime as AntigravityRuntime).onConversationId = { agyId ->
+            val localId = currentConversationId ?: return@onConversationId
+            runCatching { historyStore.setAgyConversationId(localId, agyId) }
+            emitStatus("会话ID已绑定", "success")
+        }
         oauth = app.oauth
         oauth.setListener(this)
 
@@ -252,6 +257,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             val resolvedProject = projectId.takeIf(historyStore::projectExists) ?: historyStore.ensureDefaultProject()
             currentProjectId = resolvedProject
             currentConversationId = historyStore.createConversation(resolvedProject)
+            restartRuntimeForCurrentConversation()
             persistPendingState()
             historyStore.snapshot(currentConversationId)
         }.getOrElse { historyErrorSnapshot(it) }
@@ -261,19 +267,139 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) { "当前消息尚未完成" }
             require(historyStore.conversationExists(conversationId)) { "历史会话不存在" }
             currentConversationId = conversationId
+            restartRuntimeForCurrentConversation()
             persistPendingState()
             historyStore.snapshot(currentConversationId)
         }.getOrElse { historyErrorSnapshot(it) }
+
+        @JavascriptInterface
+        fun getConversationId(): String {
+            val localId = currentConversationId ?: return JSONObject()
+                .put("localId", JSONObject.NULL)
+                .put("agyConversationId", JSONObject.NULL)
+                .toString()
+            val agy = historyStore.getAgyConversationId(localId)
+            return JSONObject()
+                .put("localId", localId)
+                .put("title", historyStore.conversationTitle(localId))
+                .put("agyConversationId", agy ?: JSONObject.NULL)
+                .toString()
+        }
+
+        @JavascriptInterface
+        fun exportConversation(format: String): String {
+            val localId = currentConversationId ?: throw IllegalStateException("当前没有打开的会话")
+            val title = historyStore.conversationTitle(localId)
+            val messages = historyStore.listMessages(localId)
+            val agyId = historyStore.getAgyConversationId(localId)
+            val body = when (format.lowercase()) {
+                "md", "markdown" -> buildMarkdownExport(title, localId, agyId, messages)
+                "html" -> buildHtmlExport(title, localId, agyId, messages)
+                else -> throw IllegalArgumentException("不支持的导出格式：$format")
+            }
+            val safeTitle = title.map { if (it.isLetterOrDigit() || it in "-_ ") it else '_' }.joinToString("")
+                .trim().ifBlank { "会话" }.take(40)
+            val fileName = "Gecis-$safeTitle-$localId.${if (format.equals("html", true)) "html" else "md"}"
+            val file = java.io.File(context.getExternalFilesDir(null) ?: context.filesDir, fileName)
+            file.writeText(body)
+            emitStatus("已导出 ${file.absolutePath}", "success")
+            return file.absolutePath
+        }
+    }
+
+    private fun restartRuntimeForCurrentConversation() {
+        val agyId = currentConversationId?.let { historyStore.getAgyConversationId(it) }
+        val rt = runtime as? AntigravityRuntime ?: return
+        rt.close()
+        runtime = AntigravityRuntime(applicationContext, tokenVault, knowledgeBase).also {
+            it.resumeConversationId = agyId
+            it.onConversationId = { id ->
+                val localId = currentConversationId
+                if (localId != null) {
+                    runCatching { historyStore.setAgyConversationId(localId, id) }
+                }
+            }
+        }
+    }
+
+    private fun buildMarkdownExport(
+        title: String,
+        localId: Long,
+        agyId: String?,
+        messages: List<Pair<String, String>>,
+    ): String = buildString {
+        append("# ").append(title).append("\n\n")
+        append("- 本地会话 ID: `").append(localId).append("`\n")
+        if (!agyId.isNullOrBlank()) {
+            append("- Antigravity 会话 ID: `").append(agyId).append("`\n")
+            append("  - 继续对话：`agy --conversation ").append(agyId).append("`\n")
+        }
+        append('\n')
+        for ((role, content) in messages) {
+            val label = if (role == "user") "用户" else "助手"
+            append("## ").append(label).append("\n\n")
+            append(content.trim()).append("\n\n---\n\n")
+        }
+    }
+
+    private fun buildHtmlExport(
+        title: String,
+        localId: Long,
+        agyId: String?,
+        messages: List<Pair<String, String>>,
+    ): String {
+        val blocks = buildString {
+            for ((role, content) in messages) {
+                val label = if (role == "user") "用户" else "助手"
+                val klass = if (role == "user") "user" else "assistant"
+                val escaped = content
+                    .replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                    .replace("\"", "&quot;")
+                append("<section class=\"message $klass\"><div class=\"meta\">$label</div>")
+                append("<div class=\"bubble\" data-md=\"$escaped\"></div></section>\n")
+            }
+        }
+        val agyLine = if (!agyId.isNullOrBlank()) {
+            "<li>Antigravity 会话 ID：<code>$agyId</code> · 继续：<code>agy --conversation $agyId</code></li>"
+        } else ""
+        return """
+            <!doctype html>
+            <html lang="zh-CN"><head><meta charset="utf-8" /><title>$title</title>
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+            <style>
+            body{font-family:Inter,system-ui,sans-serif;background:#f7f7f5;color:#171717;margin:0;padding:32px}
+            main{max-width:760px;margin:0 auto}.message{margin:0 0 28px;line-height:1.72}
+            .user .bubble{max-width:82%;margin-left:auto;background:#e9e9e5;border-radius:20px 20px 5px 20px;padding:12px 16px;white-space:pre-wrap}
+            .assistant img{max-width:100%}.katex-display{overflow-x:auto}
+            </style></head><body><main>
+            <h1>$title</h1>
+            <ul><li>本地会话 ID：<code>$localId</code></li>$agyLine</ul>
+            $blocks
+            </main>
+            <script src="https://cdn.jsdelivr.net/npm/marked@14.1.0/marked.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+            <script>
+            function protectMath(s){const e=[],p='GECISMATHTOKEN',x='ENDTOKEN';
+            const re=/\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$[^$\n]+?\$/g;
+            return {text:s.replace(re,m=>{e.push(m);return p+(e.length-1)+x}),e,p,x};}
+            function restore(h,pm){return h.replace(new RegExp(pm.p+'(\\d+)'+pm.x,'g'),(_,i)=>pm.e[Number(i)]||'');}
+            document.querySelectorAll('.bubble[data-md]').forEach(el=>{
+              const md=el.getAttribute('data-md')||'';const pm=protectMath(md);
+              const dirty=marked.parse(pm.text,{gfm:true,breaks:true});
+              const clean=DOMPurify.sanitize(dirty,{USE_PROFILES:{html:true},FORBID_TAGS:['iframe','object','embed','style','form','input','button','script']});
+              el.innerHTML=restore(clean,pm);
+              if(window.renderMathInElement)renderMathInElement(el,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false}],ignoredTags:['script','noscript','style','textarea','pre','code','option'],throwOnError:false,trust:false});
+            });
+            </script></body></html>
+        """.trimIndent()
     }
 
     private fun handleSubmittedMessage(message: PendingChatMessage) {
-        if (!knowledgeBase.hasDatabase()) {
-            pendingAfterDatabase = message
-            persistPendingState()
-            emitStatus("请选择 fenbi.db", "working")
-            launchFenbiPicker(message)
-            return
-        }
+        // Model drives fenbi search via MCP. Do not block the send path on a file picker.
         persistUserMessageThenContinue(message)
     }
 

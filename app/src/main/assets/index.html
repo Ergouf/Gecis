@@ -11,133 +11,75 @@
     button,input,textarea{font:inherit}.app{min-height:100vh;display:flex;flex-direction:column}
     header{height:54px;display:flex;align-items:center;padding:0 14px;border-bottom:1px solid #e8e8e4;background:rgba(247,247,245,.95);position:sticky;top:0;z-index:20;backdrop-filter:blur(16px)}
     .history-trigger{width:36px;height:36px;border:0;background:transparent;color:#292929;border-radius:11px;display:grid;place-items:center;font-size:20px;padding:0;margin-right:2px}.history-trigger:active{background:#e9e9e5}
-    .brand{font-size:18px;font-weight:650;letter-spacing:-.02em}.status{margin-left:auto;font-size:12px;color:#777;max-width:min(58vw,460px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color .18s ease}.status[data-state="success"]{color:#327a4a}.status[data-state="error"]{color:#aa3a3a}.status[data-state="working"]::before{content:"";display:inline-block;width:7px;height:7px;margin-right:7px;border-radius:50%;background:currentColor;vertical-align:1px;animation:pulse 1.1s ease-in-out infinite}@keyframes pulse{50%{opacity:.25}}
+    .brand{font-size:18px;font-weight:650;letter-spacing:-.02em}
+    .header-actions{display:flex;gap:6px;margin-left:10px;flex-wrap:nowrap;overflow:auto}
+    .header-btn{height:30px;padding:0 10px;border:1px solid #deded9;border-radius:9px;background:white;color:#292929;font-size:12px;white-space:nowrap}
+    .status{margin-left:auto;font-size:12px;color:#777;max-width:min(40vw,220px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color .18s ease}
+    .status[data-state="success"]{color:#327a4a}.status[data-state="error"]{color:#aa3a3a}.status[data-state="working"]::before{content:"";display:inline-block;width:7px;height:7px;margin-right:7px;border-radius:50%;background:currentColor;vertical-align:1px;animation:pulse 1.1s ease-in-out infinite}
+    @keyframes pulse{50%{opacity:.25}}
     main{flex:1;width:min(760px,100%);margin:0 auto;padding:22px 18px 130px}
     .message{margin:0 0 26px;line-height:1.72;font-size:16px}.user{display:flex;justify-content:flex-end}
     .user .bubble{max-width:82%;background:#e9e9e5;border-radius:20px 20px 5px 20px;padding:11px 15px;white-space:pre-wrap;overflow-wrap:anywhere}
     .assistant .bubble{max-width:100%;overflow-wrap:anywhere}.assistant .bubble>:first-child{margin-top:0}.assistant .bubble>:last-child{margin-bottom:0}
-    .assistant p{margin:.4em 0 1em}.assistant h1,.assistant h2,.assistant h3{line-height:1.3;letter-spacing:-.025em;margin:1.25em 0 .55em}.assistant h1{font-size:1.55em}.assistant h2{font-size:1.3em}.assistant h3{font-size:1.12em}
-    .assistant ul,.assistant ol{padding-left:1.4em;margin:.55em 0 1em}.assistant li{margin:.2em 0}.assistant li>p{margin:.2em 0}
-    .assistant blockquote{margin:.75em 0 1em;padding:.1em 0 .1em 14px;border-left:3px solid #d2d2cc;color:#626262}.assistant blockquote p{margin:.25em 0}
+    .assistant p{margin:.4em 0 1em}.assistant h1,.assistant h2,.assistant h3{line-height:1.3;letter-spacing:-.025em;margin:1.25em 0 .55em}
+    .assistant ul,.assistant ol{padding-left:1.4em;margin:.55em 0 1em}
     .assistant code{font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:.88em;background:#ecece8;border-radius:6px;padding:.13em .34em}
-    .assistant pre{margin:.8em 0 1.1em;padding:13px 14px;border:1px solid #e0e0db;border-radius:12px;background:#efefeb;overflow:auto;line-height:1.55}.assistant pre code{background:transparent;padding:0;border-radius:0;white-space:pre;overflow-wrap:normal}
-    .assistant table{width:100%;border-collapse:collapse;margin:.9em 0 1.1em;display:block;overflow-x:auto}.assistant th,.assistant td{border-bottom:1px solid #deded9;padding:8px 12px;text-align:left;white-space:nowrap}.assistant th{font-weight:650}
-    .assistant a{color:#2d5c96;text-decoration-thickness:1px;text-underline-offset:2px}.assistant hr{border:0;border-top:1px solid #deded9;margin:1.4em 0}
-    .assistant .katex-display{overflow-x:auto;overflow-y:hidden;padding:8px 0}.assistant .katex{font-size:1.04em}
-    .assistant.pending .bubble:empty::after{content:"";display:inline-block;width:6px;height:1em;background:#777;vertical-align:-2px;animation:blink 1s steps(1) infinite}
-    .assistant.pending .bubble:not(:empty)::after{content:"";display:inline-block;width:6px;height:1em;margin-left:4px;background:#777;vertical-align:-2px;animation:blink 1s steps(1) infinite}@keyframes blink{50%{opacity:0}}
+    .assistant pre{margin:.8em 0 1.1em;padding:13px 14px;border:1px solid #e0e0db;border-radius:12px;background:#efefeb;overflow:auto;line-height:1.55}.assistant pre code{background:transparent;padding:0;white-space:pre}
+    .assistant table{width:100%;border-collapse:collapse;margin:.9em 0 1.1em;display:block;overflow-x:auto}.assistant th,.assistant td{border-bottom:1px solid #deded9;padding:8px 12px;text-align:left;white-space:nowrap}
+    .assistant a{color:#2d5c96}.assistant .katex-display{overflow-x:auto;overflow-y:hidden;padding:8px 0}
+    .assistant img{max-width:100%;border-radius:8px}
+    .assistant.pending .bubble:not(:empty)::after{content:"";display:inline-block;width:6px;height:1em;margin-left:4px;background:#777;vertical-align:-2px;animation:blink 1s steps(1) infinite}
+    @keyframes blink{50%{opacity:0}}
     .composer-wrap{position:fixed;left:0;right:0;bottom:0;padding:12px 14px calc(12px + env(safe-area-inset-bottom));background:linear-gradient(transparent,#f7f7f5 24%,#f7f7f5);z-index:10}
     .composer{width:min(760px,100%);margin:0 auto;background:white;border:1px solid #deded9;border-radius:24px;padding:9px 10px 9px 16px;display:flex;align-items:flex-end;gap:8px;box-shadow:0 8px 30px rgba(0,0,0,.07)}
-    textarea{flex:1;resize:none;border:0;outline:0;line-height:1.45;max-height:160px;min-height:28px;padding:5px 0;background:transparent;color:#171717}.send{width:38px;height:38px;flex:0 0 38px;border:0;border-radius:50%;background:#171717;color:white;font-size:20px;display:grid;place-items:center}.send:disabled{opacity:.3}
+    textarea{flex:1;resize:none;border:0;outline:0;line-height:1.45;max-height:160px;min-height:28px;padding:5px 0;background:transparent;color:#171717}
+    .send{width:38px;height:38px;flex:0 0 38px;border:0;border-radius:50%;background:#171717;color:white;font-size:20px;display:grid;place-items:center}.send:disabled{opacity:.3}
     .empty{padding-top:15vh;text-align:center}.empty h1{font-size:30px;margin:0 0 10px;letter-spacing:-.04em}.empty p{color:#777;margin:0}
     .drawer-scrim{position:fixed;inset:0;background:rgba(0,0,0,.16);z-index:40;opacity:0;pointer-events:none;transition:opacity .18s ease}.drawer-scrim.open{opacity:1;pointer-events:auto}
     .drawer{position:fixed;top:0;bottom:0;left:0;width:min(84vw,340px);background:#f7f7f5;z-index:41;transform:translateX(-102%);transition:transform .2s ease;box-shadow:12px 0 34px rgba(0,0,0,.1);display:flex;flex-direction:column;padding-top:var(--android-safe-top,0px)}.drawer.open{transform:translateX(0)}
-    .drawer-head{height:58px;display:flex;align-items:center;padding:0 14px 0 18px;border-bottom:1px solid #e5e5e0}.drawer-title{font-weight:680;letter-spacing:-.02em}.drawer-actions{margin-left:auto;display:flex;gap:4px}.drawer-icon{width:34px;height:34px;border:0;border-radius:10px;background:transparent;color:#333;font-size:20px}.drawer-icon:active{background:#e9e9e5}
-    .project-list{overflow:auto;padding:12px 10px 24px}.project{margin-bottom:12px}.project-head{display:flex;align-items:center;height:34px;padding:0 8px;color:#6c6c6c;font-size:12px;font-weight:650}.project-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.project-new-chat{margin-left:auto;width:28px;height:28px;border:0;background:transparent;border-radius:8px;color:#777;font-size:18px}.project-new-chat:active{background:#e9e9e5}
-    .conversation{width:100%;display:block;border:0;background:transparent;text-align:left;border-radius:10px;padding:9px 10px;color:#292929;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.conversation:active,.conversation.current{background:#e9e9e5}.project-empty{padding:7px 10px;color:#a0a0a0;font-size:13px}
+    .drawer-head{height:58px;display:flex;align-items:center;padding:0 14px 0 18px;border-bottom:1px solid #e5e5e0}.drawer-title{font-weight:680}.drawer-actions{margin-left:auto;display:flex;gap:4px}.drawer-icon{width:34px;height:34px;border:0;border-radius:10px;background:transparent;color:#333;font-size:20px}
+    .project-list{overflow:auto;padding:12px 10px 24px}.project{margin-bottom:12px}.project-head{display:flex;align-items:center;height:34px;padding:0 8px;color:#6c6c6c;font-size:12px;font-weight:650}.project-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .conversation{width:100%;display:block;border:0;background:transparent;text-align:left;border-radius:10px;padding:9px 10px;color:#292929;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   </style>
 </head>
 <body>
 <div class="app">
-  <header><button class="history-trigger" id="historyTrigger" type="button" aria-label="历史记录">☰</button><div class="brand">Gecis</div><div class="status" id="status" data-state="idle">本地学习助手</div></header>
+  <header>
+    <button class="history-trigger" id="historyTrigger" type="button" aria-label="历史记录">☰</button>
+    <div class="brand">Gecis</div>
+    <div class="header-actions">
+      <button class="header-btn" id="btnImportFenbi" type="button">导入题库</button>
+      <button class="header-btn" id="btnCopyId" type="button">复制ID</button>
+      <button class="header-btn" id="btnExportMd" type="button">导出MD</button>
+      <button class="header-btn" id="btnExportHtml" type="button">导出HTML</button>
+      <button class="header-btn" id="btnLogin" type="button">登录</button>
+    </div>
+    <div class="status" id="status" data-state="idle">本地学习助手</div>
+  </header>
   <main id="messages"></main>
-  <div class="composer-wrap"><form id="form" class="composer"><textarea id="input" rows="1" placeholder="问一道题、一个概念，或让它解释公式…"></textarea><button id="send" class="send" type="submit" aria-label="发送">↑</button></form></div>
+  <div class="composer-wrap">
+    <form id="form" class="composer">
+      <textarea id="input" rows="1" placeholder="问一道题、一个概念，或让它解释公式…"></textarea>
+      <button id="send" class="send" type="submit" aria-label="发送">↑</button>
+    </form>
+  </div>
 </div>
 <div class="drawer-scrim" id="drawerScrim"></div>
 <aside class="drawer" id="drawer" aria-hidden="true">
-  <div class="drawer-head"><div class="drawer-title">对话</div><div class="drawer-actions"><button class="drawer-icon" id="newProject" type="button" title="新建项目">＋</button><button class="drawer-icon" id="closeDrawer" type="button" title="关闭">×</button></div></div>
+  <div class="drawer-head">
+    <div class="drawer-title">对话</div>
+    <div class="drawer-actions">
+      <button class="drawer-icon" id="newProject" type="button" title="新建项目">＋</button>
+      <button class="drawer-icon" id="closeDrawer" type="button" title="关闭">×</button>
+    </div>
+  </div>
   <div class="project-list" id="projectList"></div>
 </aside>
 <script src="vendor/dompurify/purify.min.js"></script>
 <script src="vendor/marked/marked.umd.js"></script>
 <script src="vendor/katex/katex.min.js"></script>
 <script src="vendor/katex/auto-render.min.js"></script>
-<script>
-const messages=document.getElementById('messages');
-const form=document.getElementById('form');
-const input=document.getElementById('input');
-const send=document.getElementById('send');
-const status=document.getElementById('status');
-const drawer=document.getElementById('drawer');
-const drawerScrim=document.getElementById('drawerScrim');
-const projectList=document.getElementById('projectList');
-let active=null;
-let statusResetTimer=null;
-let historyInitialized=false;
-let currentConversationId=null;
-let currentProjectId=null;
-
-function renderEmpty(){
-  messages.innerHTML='<section class="empty"><h1>想学什么？</h1><p>直接提问。支持 Markdown 与数学公式。</p></section>';
-}
-renderEmpty();
-
-function setStatus(text,state='idle'){
-  clearTimeout(statusResetTimer);
-  status.textContent=text||'本地学习助手';
-  status.dataset.state=state;
-  if(state==='success')statusResetTimer=setTimeout(()=>setStatus('本地学习助手','idle'),2200);
-}
-function escapeHtml(value){return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function protectMath(source){const expressions=[];const tokenPrefix='GECISMATHTOKEN';const tokenSuffix='ENDTOKEN';const pattern=/\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$[^$\n]+?\$/g;const text=source.replace(pattern,match=>{const index=expressions.push(match)-1;return `${tokenPrefix}${index}${tokenSuffix}`;});return{text,expressions,tokenPrefix,tokenSuffix};}
-function restoreMath(html,protectedMath){const pattern=new RegExp(`${protectedMath.tokenPrefix}(\\d+)${protectedMath.tokenSuffix}`,'g');return html.replace(pattern,(_,index)=>escapeHtml(protectedMath.expressions[Number(index)]||''));}
-function renderMath(node){if(!window.renderMathInElement)return;renderMathInElement(node,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false}],ignoredTags:['script','noscript','style','textarea','pre','code','option'],throwOnError:false,trust:false,strict:'warn'});}
-function renderAssistant(node,text){if(!window.marked||!window.DOMPurify){node.textContent=text;return;}const math=protectMath(text);const dirty=window.marked.parse(math.text,{gfm:true,breaks:true});const clean=window.DOMPurify.sanitize(dirty,{USE_PROFILES:{html:true},FORBID_TAGS:['img','iframe','object','embed','style','form','input','button','video','audio']});node.innerHTML=restoreMath(clean,math);renderMath(node);}
-function renderUser(node,text){node.textContent=text;}
-function renderMessage(node,role,text){if(role==='assistant')renderAssistant(node,text);else renderUser(node,text);}
-function addMessage(role,text,requestId,scroll=true){messages.querySelector('.empty')?.remove();const row=document.createElement('section');row.className=`message ${role}`;if(requestId)row.dataset.requestId=requestId;const bubble=document.createElement('div');bubble.className='bubble';renderMessage(bubble,role,text);row.appendChild(bubble);messages.appendChild(row);if(scroll)window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});return row;}
-function beginAssistant(requestId){const row=addMessage('assistant','',requestId);row.classList.add('pending');active={requestId,row,bubble:row.querySelector('.bubble'),text:''};return active;}
-function finish(){send.disabled=false;if(status.dataset.state==='working')setStatus('本地学习助手','idle');input.focus();}
-function openDrawer(){drawer.classList.add('open');drawerScrim.classList.add('open');drawer.setAttribute('aria-hidden','false');}
-function closeDrawer(){drawer.classList.remove('open');drawerScrim.classList.remove('open');drawer.setAttribute('aria-hidden','true');}
-function parseNativeSnapshot(raw){return typeof raw==='string'?JSON.parse(raw):raw;}
-function renderProjectList(snapshot){
-  currentConversationId=snapshot?.currentConversationId??null;currentProjectId=snapshot?.currentProjectId??currentProjectId;projectList.innerHTML='';
-  for(const project of snapshot?.projects||[]){
-    const section=document.createElement('section');section.className='project';
-    const head=document.createElement('div');head.className='project-head';const name=document.createElement('div');name.className='project-name';name.textContent=project.name;head.appendChild(name);
-    const plus=document.createElement('button');plus.className='project-new-chat';plus.type='button';plus.textContent='＋';plus.title='在此项目中新建对话';plus.addEventListener('click',()=>newConversation(project.id));head.appendChild(plus);section.appendChild(head);
-    if(!project.conversations?.length){const empty=document.createElement('div');empty.className='project-empty';empty.textContent='暂无对话';section.appendChild(empty);}else{
-      for(const conversation of project.conversations){const item=document.createElement('button');item.type='button';item.className='conversation'+(conversation.id===currentConversationId?' current':'');item.textContent=conversation.title;item.addEventListener('click',()=>openConversation(conversation.id));section.appendChild(item);}
-    }
-    projectList.appendChild(section);
-  }
-}
-function replaceConversation(snapshot){
-  active=null;send.disabled=false;messages.innerHTML='';
-  for(const message of snapshot?.messages||[])addMessage(message.role,message.content,null,false);
-  if(!(snapshot?.messages||[]).length)renderEmpty();else window.scrollTo({top:document.body.scrollHeight});
-}
-function applySnapshot(raw,replace=false){try{const snapshot=parseNativeSnapshot(raw);renderProjectList(snapshot);if(replace)replaceConversation(snapshot);return snapshot;}catch(err){setStatus('历史记录读取失败','error');console.error(err);return null;}}
-function newConversation(projectId){if(active){setStatus('请等待当前回答完成','error');return;}try{const raw=window.GecisNative.newConversation(Number(projectId));applySnapshot(raw,true);closeDrawer();setStatus('新对话','idle');}catch(err){setStatus(err.message||'无法新建对话','error');}}
-function openConversation(conversationId){if(active){setStatus('请等待当前回答完成','error');return;}try{const raw=window.GecisNative.openConversation(Number(conversationId));applySnapshot(raw,true);closeDrawer();setStatus('已打开历史对话','idle');}catch(err){setStatus(err.message||'无法打开历史对话','error');}}
-function createProject(){if(active){setStatus('请等待当前回答完成','error');return;}const name=prompt('项目名称');if(name==null)return;const value=name.trim();if(!value)return;try{const raw=window.GecisNative.createProject(value);const snapshot=applySnapshot(raw,true);if(snapshot?.currentProjectId)newConversation(snapshot.currentProjectId);}catch(err){setStatus(err.message||'无法新建项目','error');}}
-
-window.GecisChat={
-  onStatus(event){if(event)setStatus(event.text,event.state||'idle');},
-  onHistory(snapshot){renderProjectList(snapshot);if(!historyInitialized){historyInitialized=true;if(!active)replaceConversation(snapshot);}},
-  onResumeTurn(event){
-    if(!event?.requestId||active)return;
-    const lastUser=[...messages.querySelectorAll('.message.user .bubble')].pop();
-    if(!lastUser||lastUser.textContent!==event.text)addMessage('user',event.text||'');
-    beginAssistant(event.requestId);
-    send.disabled=true;
-  },
-  onNativeEvent(event){
-    if(!active||event.requestId!==active.requestId){
-      if(!active&&(event.type==='complete'||event.type==='error'))finish();
-      return;
-    }
-    if(event.type==='delta'){active.text+=event.text;renderAssistant(active.bubble,active.text);window.scrollTo({top:document.body.scrollHeight});return;}
-    active.row.classList.remove('pending');
-    if(event.type==='complete'){active.text=event.text||active.text;renderAssistant(active.bubble,active.text);}else if(event.type==='error'){active.text='发生错误：'+event.text;renderAssistant(active.bubble,active.text);}
-    active=null;finish();
-  }
-};
-
-document.getElementById('historyTrigger').addEventListener('click',openDrawer);document.getElementById('closeDrawer').addEventListener('click',closeDrawer);drawerScrim.addEventListener('click',closeDrawer);document.getElementById('newProject').addEventListener('click',createProject);
-form.addEventListener('submit',e=>{e.preventDefault();const text=input.value.trim();if(!text||active)return;const requestId=(crypto.randomUUID?.()||`${Date.now()}-${Math.random()}`);addMessage('user',text);input.value='';input.style.height='auto';send.disabled=true;setStatus('正在准备…','working');beginAssistant(requestId);try{if(!window.GecisNative?.sendMessage)throw new Error('原生 AI 桥尚未连接');window.GecisNative.sendMessage(requestId,text);}catch(err){window.GecisChat.onNativeEvent({type:'error',requestId,text:err.message});}});
-input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();form.requestSubmit();}});input.addEventListener('input',()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,160)+'px';});
-</script>
+<script src="bridge.js"></script>
+<script src="app.js"></script>
 </body>
 </html>

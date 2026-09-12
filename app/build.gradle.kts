@@ -3,6 +3,16 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val releaseStoreFilePath = providers.gradleProperty("GECIS_SIGNING_STORE_FILE").orNull
+val releaseStorePassword = providers.gradleProperty("GECIS_SIGNING_STORE_PASSWORD").orNull
+val releaseKeyAlias = providers.gradleProperty("GECIS_SIGNING_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.gradleProperty("GECIS_SIGNING_KEY_PASSWORD").orNull
+val releaseSigningConfigured =
+    !releaseStoreFilePath.isNullOrBlank() &&
+        !releaseStorePassword.isNullOrBlank() &&
+        !releaseKeyAlias.isNullOrBlank() &&
+        !releaseKeyPassword.isNullOrBlank()
+
 android {
     namespace = "com.ergouf.gecis"
     compileSdk = 35
@@ -12,8 +22,8 @@ android {
         applicationId = "com.ergouf.gecis"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.2.3"
+        versionCode = 10
+        versionName = "0.2.4"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -33,27 +43,23 @@ android {
         buildConfig = true
     }
 
-    val releaseStoreFile = file(project.findProperty("storeFile") as? String ?: "${rootDir}/release.keystore")
     signingConfigs {
-        create("release") {
-            storeFile = releaseStoreFile
-            storePassword = project.findProperty("storePassword") as? String ?: "gecis123"
-            keyAlias = project.findProperty("keyAlias") as? String ?: "gecis"
-            keyPassword = project.findProperty("keyPassword") as? String ?: "gecis123"
-            enableV1Signing = true
-            enableV2Signing = true
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = rootProject.file(releaseStoreFilePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+            }
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            if (releaseStoreFile.isFile) {
-                signingConfig = signingConfigs.getByName("release")
-            }
-        }
-        debug {
-            if (releaseStoreFile.isFile) {
+            if (releaseSigningConfigured) {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
@@ -63,6 +69,28 @@ android {
         jniLibs {
             useLegacyPackaging = true
             keepDebugSymbols += setOf("**/libgecis_*.so")
+        }
+    }
+}
+
+val verifyReleaseSigningConfig = tasks.register("verifyReleaseSigningConfig") {
+    doLast {
+        val missing = buildList {
+            if (releaseStoreFilePath.isNullOrBlank()) add("GECIS_SIGNING_STORE_FILE")
+            if (releaseStorePassword.isNullOrBlank()) add("GECIS_SIGNING_STORE_PASSWORD")
+            if (releaseKeyAlias.isNullOrBlank()) add("GECIS_SIGNING_KEY_ALIAS")
+            if (releaseKeyPassword.isNullOrBlank()) add("GECIS_SIGNING_KEY_PASSWORD")
+        }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "Release signing is required. Missing Gradle properties: ${missing.joinToString(", ")}. " +
+                    "Set them in ~/.gradle/gradle.properties or via ORG_GRADLE_PROJECT_* environment variables.",
+            )
+        }
+
+        val keystore = rootProject.file(releaseStoreFilePath!!)
+        if (!keystore.isFile || keystore.length() == 0L) {
+            throw GradleException("Release signing keystore does not exist or is empty: ${keystore.absolutePath}")
         }
     }
 }
@@ -100,6 +128,7 @@ val verifyGeneratedPayloads = tasks.register("verifyGeneratedPayloads") {
 
 tasks.configureEach {
     if (name == "preBuild") dependsOn(verifyGeneratedPayloads)
+    if (name == "preReleaseBuild") dependsOn(verifyReleaseSigningConfig)
 }
 
 dependencies {

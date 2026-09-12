@@ -346,7 +346,8 @@ menu.addEventListener('click', async (e) => {
       else setStatus('已取消导出', 'idle');
     } else if (action === 'login') {
       const message = await window.GecisNative.startLogin();
-      setStatus(message || '请完成登录', 'working');
+      setStatus('正在浏览器中完成 Google 登录…', 'working');
+      if (message) console.info(message);
     }
   } catch (err) {
     setStatus(err.message || '操作失败', 'error');

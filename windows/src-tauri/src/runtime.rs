@@ -546,7 +546,7 @@ pub fn e2e_chat_once(prompt: &str, timeout: std::time::Duration) -> Result<Strin
 pub fn install_hint() -> Value {
     json!({
         "install": "irm https://antigravity.google/cli/install.ps1 | iex",
-        "login": "安装后在终端运行 agy 完成 Google 登录，或设置 GECIS_AGY 指向 agy.exe",
+        "login": "在 Gecis 内点「登录」，将在系统浏览器完成 Google 授权（不弹命令行）",
         "env": "GECIS_AGY",
         "defaultPath": default_install_path(),
     })
@@ -558,28 +558,125 @@ pub fn default_install_path() -> String {
         .unwrap_or_else(|| "%LOCALAPPDATA%\\agy\\bin\\agy.exe".into())
 }
 
-/// Launch interactive `agy` in a new console so the user can finish Google Sign-In.
-pub fn start_interactive_login() -> Result<String, String> {
-    let locator = locate_agy()?;
-    let agy = locator.path.display().to_string();
-    #[cfg(target_os = "windows")]
+fn open_url_hidden(url: &str) -> Result<(), String> {
+    #[cfg(windows)]
     {
-        let mut command = Command::new("cmd");
-        command
-            .args(["/c", "start", "Gecis - Antigravity Login", &agy])
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", url])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        command
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn()
-            .map_err(|e| format!("无法打开登录窗口: {e}"))?;
-        Ok(format!("已打开登录窗口：{agy}\n请在新终端完成 Google 登录后回到 Gecis 重试。"))
+            .map_err(|e| format!("无法打开浏览器: {e}"))?;
+        Ok(())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(windows))]
     {
-        let _ = agy;
-        Err("当前平台请手动运行 agy 登录".into())
+        let _ = url;
+        Err("当前平台请手动完成登录".into())
     }
+}
+
+/// Background Google Sign-In: no console window. Opens the system browser if agy prints an OAuth URL.
+pub fn start_background_login() -> Result<String, String> {
+    let locator = locate_agy()?;
+    let mut command = Command::new(&locator.path);
+    command
+        .args([
+            "--print",
+            "ping",
+            "--output-format",
+            "text",
+            "--print-timeout",
+            "3m",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    if let Some(dir) = app_data_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        command.current_dir(&dir);
+    }
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("无法启动登录流程: {e}"))?;
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let (tx, rx) = channel::<String>();
+    let tx2 = tx.clone();
+    thread::spawn(move || {
+        if let Some(out) = stdout {
+            for line in BufReader::new(out).lines().map_while(Result::ok) {
+                let _ = tx.send(line);
+            }
+        }
+    });
+    thread::spawn(move || {
+        if let Some(err) = stderr {
+            for line in BufReader::new(err).lines().map_while(Result::ok) {
+                let _ = tx2.send(line);
+            }
+        }
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    let mut opened = false;
+    while std::time::Instant::now() < deadline {
+        match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(line) => {
+                if let Some(url) = extract_oauth_url(&line) {
+                    open_url_hidden(&url)?;
+                    opened = true;
+                    break;
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    // Detach so the process can finish the OAuth exchange after browser auth.
+    std::mem::forget(child);
+
+    if opened {
+        Ok("已在系统浏览器打开 Google 登录，请完成授权后返回 Gecis。".into())
+    } else {
+        Ok("登录已在后台启动。若未跳转浏览器，请稍候重试，或检查网络。".into())
+    }
+}
+
+fn extract_oauth_url(line: &str) -> Option<String> {
+    let re = regex::Regex::new("https?://[^\\s\"'<>]+").ok()?;
+    let mut fallback = None;
+    for m in re.find_iter(line) {
+        let url = m.as_str().trim_end_matches(['.', ',', ')', ']']);
+        let lower = url.to_ascii_lowercase();
+        if lower.contains("accounts.google.com")
+            || lower.contains("oauth")
+            || lower.contains("authorize")
+            || lower.contains("antigravity.google")
+            || lower.contains("gemini")
+        {
+            return Some(url.to_string());
+        }
+        if fallback.is_none() && lower.starts_with("https://") {
+            fallback = Some(url.to_string());
+        }
+    }
+    fallback
 }
 
 pub fn probe_version() -> Result<String, String> {

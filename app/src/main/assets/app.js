@@ -2,10 +2,13 @@ const messages = document.getElementById('messages');
 const form = document.getElementById('form');
 const input = document.getElementById('input');
 const send = document.getElementById('send');
-const status = document.getElementById('status');
+const statusEl = document.getElementById('status');
 const drawer = document.getElementById('drawer');
 const drawerScrim = document.getElementById('drawerScrim');
 const projectList = document.getElementById('projectList');
+const menu = document.getElementById('menu');
+const btnMenu = document.getElementById('btnMenu');
+
 let active = null;
 let statusResetTimer = null;
 let historyInitialized = false;
@@ -13,16 +16,22 @@ let currentConversationId = null;
 let currentProjectId = null;
 
 function renderEmpty() {
-  messages.innerHTML =
-    '<section class="empty"><h1>想学什么？</h1><p>直接提问。支持 Markdown 与数学公式。</p></section>';
+  messages.innerHTML = `
+    <section class="empty">
+      <div class="empty-mark">G</div>
+      <h1>想学什么？</h1>
+      <p>直接提问。支持 Markdown 与数学公式。需要时，模型会自行检索本地题库。</p>
+    </section>`;
 }
 renderEmpty();
 
 function setStatus(text, state = 'idle') {
   clearTimeout(statusResetTimer);
-  status.textContent = text || '本地学习助手';
-  status.dataset.state = state;
-  if (state === 'success') statusResetTimer = setTimeout(() => setStatus('本地学习助手', 'idle'), 2200);
+  statusEl.textContent = text || '就绪';
+  statusEl.dataset.state = state;
+  if (state === 'success') {
+    statusResetTimer = setTimeout(() => setStatus('就绪', 'idle'), 2200);
+  }
 }
 
 function escapeHtml(value) {
@@ -73,24 +82,10 @@ function renderAssistant(node, text) {
   const dirty = window.marked.parse(math.text, { gfm: true, breaks: true });
   const clean = window.DOMPurify.sanitize(dirty, {
     USE_PROFILES: { html: true },
-    FORBID_TAGS: ['img', 'iframe', 'object', 'embed', 'style', 'form', 'input', 'button', 'video', 'audio'],
-  });
-  // Allow images in assistant output (multimedia) while keeping script/iframe blocked.
-  const cleanWithImg = window.DOMPurify.sanitize(dirty, {
-    USE_PROFILES: { html: true },
     FORBID_TAGS: ['iframe', 'object', 'embed', 'style', 'form', 'input', 'button', 'script'],
   });
-  node.innerHTML = restoreMath(cleanWithImg || clean, math);
+  node.innerHTML = restoreMath(clean, math);
   renderMath(node);
-}
-
-function renderUser(node, text) {
-  node.textContent = text;
-}
-
-function renderMessage(node, role, text) {
-  if (role === 'assistant') renderAssistant(node, text);
-  else renderUser(node, text);
 }
 
 function addMessage(role, text, requestId, scroll = true) {
@@ -100,7 +95,8 @@ function addMessage(role, text, requestId, scroll = true) {
   if (requestId) row.dataset.requestId = requestId;
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
-  renderMessage(bubble, role, text);
+  if (role === 'assistant') renderAssistant(bubble, text);
+  else bubble.textContent = text;
   row.appendChild(bubble);
   messages.appendChild(row);
   if (scroll) window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
@@ -116,7 +112,7 @@ function beginAssistant(requestId) {
 
 function finish() {
   send.disabled = false;
-  if (status.dataset.state === 'working') setStatus('本地学习助手', 'idle');
+  if (statusEl.dataset.state === 'working') setStatus('就绪', 'idle');
   input.focus();
 }
 
@@ -125,11 +121,19 @@ function openDrawer() {
   drawerScrim.classList.add('open');
   drawer.setAttribute('aria-hidden', 'false');
 }
-
 function closeDrawer() {
   drawer.classList.remove('open');
   drawerScrim.classList.remove('open');
   drawer.setAttribute('aria-hidden', 'true');
+}
+function closeMenu() {
+  menu.classList.remove('open');
+  btnMenu.setAttribute('aria-expanded', 'false');
+}
+function toggleMenu() {
+  const open = !menu.classList.contains('open');
+  menu.classList.toggle('open', open);
+  btnMenu.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 
 function parseNativeSnapshot(raw) {
@@ -199,10 +203,7 @@ function applySnapshot(raw, replace = false) {
 }
 
 async function newConversation(projectId) {
-  if (active) {
-    setStatus('请等待当前回答完成', 'error');
-    return;
-  }
+  if (active) return setStatus('请等待当前回答完成', 'error');
   try {
     const raw = await window.GecisNative.newConversation(Number(projectId));
     applySnapshot(raw, true);
@@ -214,25 +215,19 @@ async function newConversation(projectId) {
 }
 
 async function openConversation(conversationId) {
-  if (active) {
-    setStatus('请等待当前回答完成', 'error');
-    return;
-  }
+  if (active) return setStatus('请等待当前回答完成', 'error');
   try {
     const raw = await window.GecisNative.openConversation(Number(conversationId));
     applySnapshot(raw, true);
     closeDrawer();
-    setStatus('已打开历史对话', 'idle');
+    setStatus('已打开会话', 'idle');
   } catch (err) {
-    setStatus(err.message || '无法打开历史对话', 'error');
+    setStatus(err.message || '无法打开会话', 'error');
   }
 }
 
 async function createProject() {
-  if (active) {
-    setStatus('请等待当前回答完成', 'error');
-    return;
-  }
+  if (active) return setStatus('请等待当前回答完成', 'error');
   const name = prompt('项目名称');
   if (name == null) return;
   const value = name.trim();
@@ -274,20 +269,15 @@ window.GecisChat = {
     if (!matchesActive) {
       if (active && terminal) {
         active.row.classList.remove('pending');
-        if (event.type === 'error' && event.text) {
-          active.text = String(event.text);
-          renderAssistant(active.bubble, active.text);
-        } else if (event.type === 'complete' && event.text) {
-          active.text = event.text;
+        if (event.text) {
+          active.text = event.type === 'error' ? String(event.text) : event.text;
           renderAssistant(active.bubble, active.text);
         }
         active = null;
         finish();
         return;
       }
-      if (!active && event?.type === 'error' && event.text) {
-        setStatus(event.text, 'error');
-      }
+      if (!active && event?.type === 'error' && event.text) setStatus(event.text, 'error');
       if (!active && terminal) finish();
       return;
     }
@@ -314,55 +304,55 @@ document.getElementById('historyTrigger').addEventListener('click', openDrawer);
 document.getElementById('closeDrawer').addEventListener('click', closeDrawer);
 drawerScrim.addEventListener('click', closeDrawer);
 document.getElementById('newProject').addEventListener('click', createProject);
-
-document.getElementById('btnImportFenbi')?.addEventListener('click', () => {
-  setStatus('请在导入题库入口选择 fenbi.db', 'idle');
+btnMenu.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleMenu();
 });
+document.addEventListener('click', () => closeMenu());
+menu.addEventListener('click', (e) => e.stopPropagation());
 
-document.getElementById('btnLogin')?.addEventListener('click', async () => {
+menu.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  closeMenu();
+  const action = btn.dataset.action;
   try {
-    const message = await window.GecisNative.startLogin();
-    setStatus(message || '请完成 Google 登录', 'working');
-  } catch (err) {
-    setStatus(err.message || '无法启动登录', 'error');
-  }
-});
-
-document.getElementById('btnCopyId')?.addEventListener('click', async () => {
-  try {
-    const meta = await window.GecisNative.getConversationId();
-    if (!meta?.agyConversationId) {
-      setStatus('尚无会话 ID，请先发送一条消息', 'error');
-      return;
+    if (action === 'importFenbi') {
+      setStatus('请选择 fenbi.db…', 'working');
+      const result = await window.GecisNative.importFenbi();
+      if (result === 'cancelled') setStatus('已取消导入', 'idle');
+    } else if (action === 'copyId') {
+      const meta = await window.GecisNative.getConversationId();
+      if (!meta?.agyConversationId) {
+        setStatus('尚无会话 ID，请先发送一条消息', 'error');
+        return;
+      }
+      const text = String(meta.agyConversationId);
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+      else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      setStatus(`已复制会话 ID`, 'success');
+    } else if (action === 'exportMd' || action === 'exportHtml') {
+      const format = action === 'exportMd' ? 'md' : 'html';
+      setStatus(`正在导出…`, 'working');
+      const path = await window.GecisNative.exportConversation(format);
+      if (path !== 'cancelled') setStatus('已导出', 'success');
+      else setStatus('已取消导出', 'idle');
+    } else if (action === 'login') {
+      const message = await window.GecisNative.startLogin();
+      setStatus('正在浏览器中完成 Google 登录…', 'working');
+      if (message) console.info(message);
     }
-    const text = String(meta.agyConversationId);
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      ta.remove();
-    }
-    setStatus(`已复制会话 ID：${text}`, 'success');
   } catch (err) {
-    setStatus(err.message || '复制失败', 'error');
+    setStatus(err.message || '操作失败', 'error');
   }
 });
-
-async function exportConversation(format) {
-  try {
-    setStatus(`正在导出 ${String(format).toUpperCase()}…`, 'working');
-    const path = await window.GecisNative.exportConversation(format);
-    setStatus(`已导出：${path}`, 'success');
-  } catch (err) {
-    setStatus(err.message || '导出失败', 'error');
-  }
-}
-document.getElementById('btnExportMd')?.addEventListener('click', () => exportConversation('md'));
-document.getElementById('btnExportHtml')?.addEventListener('click', () => exportConversation('html'));
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();

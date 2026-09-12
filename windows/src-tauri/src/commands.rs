@@ -1,5 +1,5 @@
 use crate::runtime::{
-    install_hint, locate_agy, probe_version, start_interactive_login, AntigravityRuntime,
+    install_hint, locate_agy, probe_version, start_background_login, AntigravityRuntime,
     RuntimeEvent,
 };
 use crate::AppState;
@@ -344,9 +344,9 @@ pub fn runtime_status() -> Result<Value, String> {
 
 #[tauri::command]
 pub fn start_login(app: AppHandle) -> Result<String, String> {
-    match start_interactive_login() {
+    match start_background_login() {
         Ok(message) => {
-            emit_status(&app, "请在新终端完成 Google 登录", "working");
+            emit_status(&app, "正在浏览器中完成 Google 登录…", "working");
             Ok(message)
         }
         Err(err) => {
@@ -642,9 +642,9 @@ fn pump_runtime_events(app: AppHandle, request_id: String, done_tx: Sender<()>) 
                     } else {
                         rid
                     };
-                    let login_msg = start_interactive_login().unwrap_or_else(|err| {
+                    let login_msg = start_background_login().unwrap_or_else(|err| {
                         format!(
-                            "请手动在终端运行 agy 完成登录。\n{err}\n安装：{}",
+                            "请在 Gecis 菜单中点「登录」完成 Google 授权。\n{err}\n安装：{}",
                             install_hint()["install"].as_str().unwrap_or("")
                         )
                     });

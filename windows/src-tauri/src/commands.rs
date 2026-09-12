@@ -252,17 +252,8 @@ fn handle_send(app: AppHandle, request_id: String, text: String) -> Result<(), S
     emit_status(&app, "正在准备对话…", "working");
     persist_user_message(&app, &text)?;
 
-    // Never block chat on fenbi.db. Import is an explicit command.
-    let augmented = {
-        let state = app.state::<AppState>();
-        let knowledge = state.knowledge.lock().map_err(|e| e.to_string())?;
-        if knowledge.has_database() {
-            emit_status(&app, "正在检索本地题库…", "working");
-            knowledge.augment_user_message(&text)
-        } else {
-            text.clone()
-        }
-    };
+    // Model decides when/how to search via MCP `search_fenbi`. No program-side pre-retrieval.
+    let augmented = text.clone();
 
     emit_status(&app, "正在连接 AI runtime…", "working");
     {

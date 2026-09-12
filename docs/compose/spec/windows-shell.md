@@ -10,17 +10,14 @@ commits: 654ee66bd0c8669cac56720503b80ef8ab418b54..HEAD
 
 ## Report
 
-**What was built** — Gecis Windows 桌面子项目：Tauri 2 + WebView2 壳，复用 Android 聊天交互契约（`GecisNative` / `GecisChat`），实现本地 SQLite 历史、fenbi.db 只读导入与检索增强、系统 `agy` headless NDJSON 流式对话。未打包引擎、未自写 OAuth。
+**What was built** — Gecis Windows 桌面子项目：Tauri 2 + WebView2 壳，复用 Android 聊天交互契约，本地 SQLite 历史、官方 `agy` headless NDJSON 流式对话。fenbi 检索改为 **MCP 工具 `search_fenbi`，由模型自行决定是否调用、搜什么关键词**；程序不再预检索/注入 `<fenbi_context>`。Android 同步：内置 HTTP MCP，启动前写入私有 HOME 的 `mcp_config.json`。
 
-修复「发消息无反应」：本机原先只有 Antigravity GUI、没有 CLI `agy`；且首条消息会阻塞弹出 fenbi 文件框，`handle_send` 失败只写 stderr。现改为：探测 `%LOCALAPPDATA%\agy\bin\agy.exe`，启动即上报 runtime 状态，发送失败必回传 UI，fenbi 改为顶栏显式导入，新增「登录 / 安装」入口。
-
-**Verification** — `cargo check` PASS；`npm run build` PASS（NSIS/MSI）；本机 `agy -p 你好` exit=0 并正常回复。
+**Verification** — `cargo check` PASS；`cargo run --bin e2e_chat -- "只回复两个字：收到"` → `E2E OK / 收到`；`npm run build` PASS（NSIS/MSI）。
 
 **Journey log**
-- 「无反应」根因不是 OAuth 弹窗，而是未安装 `agy` CLI + 发送链路吞错。
-- 官方安装器把二进制放到 `%LOCALAPPDATA%\agy\bin\agy.exe`，常不在当前进程 PATH，必须显式扫描该路径。
-- 首条消息自动弹系统文件框会卡住后台线程，知识库改为顶栏显式操作。
-- 所有 `handle_send` 错误必须 `emit_error` 回 WebView，不能只 eprintln。
+- stream-json 实际字段是 `conversation_id` + `text_delta` + `result.status=SUCCESS`，不是 request_id。
+- 「模型决定搜索」→ MCP `search_fenbi`，两端去掉 KnowledgeAugmentingRuntime 预注入。
+- Windows e2e 走与应用相同的 spawn/parser 路径才算数。
 
 ## [S1] Problem
 
@@ -35,9 +32,9 @@ Android 版 Gecis 已交付单 APK 对话体验，但 Windows 缺少对应桌面
 1. 连续对话 UI（Markdown + KaTeX），复用 Android `index.html` 交互契约。
 2. 窄原生桥 `GecisNative`：`sendMessage` / `getHistory` / `createProject` / `newConversation` / `openConversation`，以及 `runtimeStatus` / `startLogin` / `installRuntime` / `importFenbi`。
 3. AI runtime：探测系统 `agy`，以 `--input-format stream-json --output-format stream-json --sandbox --print-timeout 5m` 常驻；NDJSON 事件 `step_update` / `result`。
-4. 知识库：顶栏「导入题库」显式选择 `fenbi.db`；发送路径永不阻塞文件框。
+4. 知识库：顶栏显式导入 `fenbi.db`；**模型通过 MCP 工具 `search_fenbi` 自行决定检索**，应用不预计算查询词、不注入上下文。
 5. 历史：本地 SQLite `gecis_history.db`。
-6. 认证：不自写 PKCE；未登录时 `start_login` 打开新控制台运行 `agy`；缺失时可一键跑官方安装脚本。
+6. 认证：不自写 PKCE；未登录时 `start_login` 打开新控制台运行 `agy`。
 
 ### 运行时定位顺序
 
@@ -71,3 +68,4 @@ Android 版 Gecis 已交付单 APK 对话体验，但 Windows 缺少对应桌面
 - [x] T5: agy 运行时流式对话 — acceptance: 探测失败给出指引；成功时 delta/complete 事件推进 UI (covers: S2)
 - [x] T6: 构建验证 — acceptance: `cargo check` / `npm run build` 或 `tauri build` 至少编译通过 (covers: S2)
 - [x] T7: 修复无认证/无响应 — acceptance: 探测 `%LOCALAPPDATA%\agy\bin`；发送失败回传 UI；fenbi 不阻塞；登录/安装入口可用 (covers: S2)
+- [x] T8: fenbi 由模型检索 + Windows e2e — acceptance: 注册 MCP `search_fenbi`，去掉预注入；`cargo run --bin e2e_chat` 返回模型回复 (covers: S2)

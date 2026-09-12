@@ -9,6 +9,11 @@ use runtime::AntigravityRuntime;
 use std::sync::Mutex;
 use tauri::Manager;
 
+/// Used by `cargo run --bin e2e_chat` for end-to-end verification.
+pub fn runtime_e2e(prompt: &str, timeout: std::time::Duration) -> Result<String, String> {
+    runtime::e2e_chat_once(prompt, timeout)
+}
+
 pub struct AppState {
     pub history: Mutex<HistoryStore>,
     pub knowledge: Mutex<KnowledgeBase>,
@@ -34,6 +39,10 @@ pub fn run() {
             let default_project = history
                 .ensure_default_project()
                 .map_err(|e| format!("默认项目创建失败: {e}"))?;
+            // Best-effort: make sure fenbi MCP exists so the model can search on its own.
+            if let Ok(locator) = runtime::locate_agy() {
+                let _ = runtime::ensure_fenbi_mcp(&locator.path);
+            }
             app.manage(AppState {
                 history: Mutex::new(history),
                 knowledge: Mutex::new(knowledge),

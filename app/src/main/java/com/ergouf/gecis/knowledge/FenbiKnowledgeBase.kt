@@ -42,6 +42,8 @@ class FenbiKnowledgeBase(private val context: Context) {
 
     fun hasDatabase(): Boolean = databaseFile.isFile && databaseFile.length() > SQLITE_HEADER.size
 
+    fun databaseFilePath(): File = databaseFile
+
     fun importedDisplayName(uri: Uri): String? = queryDocumentMetadata(uri).first
 
     fun importFrom(

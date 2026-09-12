@@ -33,7 +33,6 @@ import com.ergouf.gecis.runtime.AntigravityOAuthCoordinator
 import com.ergouf.gecis.runtime.OAuthSessionService
 import com.ergouf.gecis.runtime.AntigravityRuntime
 import com.ergouf.gecis.runtime.ChatRuntime
-import com.ergouf.gecis.runtime.KnowledgeAugmentingRuntime
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
@@ -126,10 +125,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         historyStore = ChatHistoryStore(applicationContext)
         currentProjectId = runCatching { historyStore.ensureDefaultProject() }.getOrNull()
         restorePendingState()
-        runtime = KnowledgeAugmentingRuntime(
-            AntigravityRuntime(applicationContext, tokenVault),
-            knowledgeBase,
-        )
+        runtime = AntigravityRuntime(applicationContext, tokenVault, knowledgeBase)
         oauth = app.oauth
         oauth.setListener(this)
 

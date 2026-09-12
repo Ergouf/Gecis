@@ -5,10 +5,15 @@ description = "Gecis Windows desktop shell"
 authors = ["Gecis"]
 edition = "2021"
 rust-version = "1.77"
+default-run = "gecis-windows"
 
 [lib]
 name = "gecis_windows_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "e2e_chat"
+path = "src/bin/e2e_chat.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

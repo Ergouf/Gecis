@@ -43,9 +43,18 @@ npm run build
 ## 功能
 
 - 连续对话 UI（Markdown + KaTeX）
-- 本地 `fenbi.db` 导入与只读检索增强（`<fenbi_context>`）
+- **模型自主检索**：MCP 工具 `search_fenbi`，由 Gemini/Antigravity 决定何时搜、搜什么（不在应用侧预检索）
 - 本地 SQLite 会话历史（项目 / 会话 / 消息）
 - 系统 `agy` headless NDJSON 流式回答
+
+## e2e
+
+```powershell
+cd windows/src-tauri
+cargo run --bin e2e_chat -- "只回复两个字：收到"
+```
+
+成功时输出 `E2E OK` 与模型回复。
 
 ## 目录
 

@@ -260,8 +260,16 @@ window.GecisChat = {
     send.disabled = true;
   },
   onNativeEvent(event) {
-    if (!active || event.requestId !== active.requestId) {
-      if (!active && (event.type === 'complete' || event.type === 'error')) finish();
+    if (event?.type === 'runtime_hint') {
+      if (event.text) setStatus(event.text, 'error');
+      return;
+    }
+    const matchesActive = active && (!event?.requestId || event.requestId === active.requestId);
+    if (!matchesActive) {
+      if (!active && event?.type === 'error' && event.text) {
+        setStatus(event.text, 'error');
+      }
+      if (!active && (event?.type === 'complete' || event?.type === 'error')) finish();
       return;
     }
     if (event.type === 'delta') {
@@ -275,7 +283,7 @@ window.GecisChat = {
       active.text = event.text || active.text;
       renderAssistant(active.bubble, active.text);
     } else if (event.type === 'error') {
-      active.text = '发生错误：' + event.text;
+      active.text = String(event.text || '未知错误');
       renderAssistant(active.bubble, active.text);
     }
     active = null;
@@ -287,6 +295,26 @@ document.getElementById('historyTrigger').addEventListener('click', openDrawer);
 document.getElementById('closeDrawer').addEventListener('click', closeDrawer);
 drawerScrim.addEventListener('click', closeDrawer);
 document.getElementById('newProject').addEventListener('click', createProject);
+
+document.getElementById('btnImportFenbi').addEventListener('click', async () => {
+  try {
+    setStatus('请选择 fenbi.db…', 'working');
+    const result = await window.GecisNative.importFenbi();
+    if (result === 'cancelled') setStatus('已取消导入', 'idle');
+  } catch (err) {
+    setStatus(err.message || '导入失败', 'error');
+  }
+});
+
+document.getElementById('btnLogin').addEventListener('click', async () => {
+  try {
+    const message = await window.GecisNative.startLogin();
+    setStatus('请在新终端完成 Google 登录', 'working');
+    alert(message);
+  } catch (err) {
+    setStatus(err.message || '无法启动登录', 'error');
+  }
+});
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();

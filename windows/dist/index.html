@@ -39,6 +39,7 @@
     .drawer-head{height:58px;display:flex;align-items:center;padding:0 14px 0 18px;border-bottom:1px solid #e5e5e0}.drawer-title{font-weight:680;letter-spacing:-.02em}.drawer-actions{margin-left:auto;display:flex;gap:4px}.drawer-icon{width:34px;height:34px;border:0;border-radius:10px;background:transparent;color:#333;font-size:20px;cursor:pointer}.drawer-icon:hover{background:#e9e9e5}
     .project-list{overflow:auto;padding:12px 10px 24px}.project{margin-bottom:12px}.project-head{display:flex;align-items:center;height:34px;padding:0 8px;color:#6c6c6c;font-size:12px;font-weight:650}.project-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.project-new-chat{margin-left:auto;width:28px;height:28px;border:0;background:transparent;border-radius:8px;color:#777;font-size:18px;cursor:pointer}
     .conversation{width:100%;display:block;border:0;background:transparent;text-align:left;border-radius:10px;padding:9px 10px;color:#292929;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}.conversation:hover,.conversation.current{background:#e9e9e5}.project-empty{padding:7px 10px;color:#a0a0a0;font-size:13px}
+    .header-actions{display:flex;gap:6px;margin-left:10px}.header-btn{height:30px;padding:0 10px;border:1px solid #deded9;border-radius:9px;background:white;color:#292929;font-size:12px;cursor:pointer}.header-btn:hover{background:#efefeb}
   </style>
 </head>
 <body>
@@ -46,6 +47,10 @@
   <header>
     <button class="history-trigger" id="historyTrigger" type="button" aria-label="历史记录">☰</button>
     <div class="brand">Gecis</div>
+    <div class="header-actions">
+      <button class="header-btn" id="btnImportFenbi" type="button" title="导入本地题库">导入题库</button>
+      <button class="header-btn" id="btnLogin" type="button" title="打开 Antigravity 登录">登录</button>
+    </div>
     <div class="status" id="status" data-state="idle">本地学习助手</div>
   </header>
   <main id="messages"></main>

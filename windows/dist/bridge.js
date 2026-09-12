@@ -31,6 +31,18 @@
     openConversation(conversationId) {
       return invoke('open_conversation', { conversationId });
     },
+    runtimeStatus() {
+      return invoke('runtime_status');
+    },
+    startLogin() {
+      return invoke('start_login');
+    },
+    installRuntime() {
+      return invoke('install_runtime');
+    },
+    importFenbi() {
+      return invoke('import_fenbi');
+    },
   };
 
   window.GecisBridgeReady = (async () => {

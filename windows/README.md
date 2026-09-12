@@ -26,17 +26,19 @@ npm run build
 
 ## 运行前提
 
-1. Windows 10/11（WebView2 Runtime，一般自带）
-2. 官方 Antigravity CLI：
+1. Windows 10/11（WebView2 Runtime）
+2. 官方 Antigravity CLI（不是 GUI 版 Antigravity.exe）：
 
    ```powershell
    irm https://antigravity.google/cli/install.ps1 | iex
    ```
 
-3. 首次使用在终端运行 `agy` 完成 Google 登录
-4. 可选：设置 `GECIS_AGY` 指向自定义 `agy.exe`
+   默认安装到 `%LOCALAPPDATA%\agy\bin\agy.exe`。应用会自动扫描该路径；也可设置 `GECIS_AGY`。
 
-未安装 `agy` 时，应用仍可打开、导入 `fenbi.db`、管理本地历史；发送消息会提示安装/登录。
+3. 若未登录：点顶栏「登录」打开新终端完成 Google 登录
+4. 题库：顶栏「导入题库」选择 fenbi.db（发送消息不会弹框阻塞）
+
+未安装 `agy` 时应用仍可打开；发送消息会给出安装/登录提示。
 
 ## 功能
 

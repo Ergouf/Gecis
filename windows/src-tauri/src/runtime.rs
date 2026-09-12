@@ -50,11 +50,16 @@ pub fn locate_agy() -> Result<AgyLocator, String> {
         candidates.push(home.join("scoop/apps/antigravity-cli/current/agy.exe"));
     }
     if let Some(local) = dirs::data_local_dir() {
+        candidates.push(local.join("agy/bin/agy.exe"));
         candidates.push(local.join("Programs/agy/agy.exe"));
         candidates.push(local.join("Microsoft/WinGet/Links/agy.exe"));
     }
     if let Some(profile) = std::env::var_os("USERPROFILE") {
         let profile = PathBuf::from(profile);
+        candidates.push(
+            profile
+                .join("AppData/Local/agy/bin/agy.exe"),
+        );
         candidates.push(profile.join(".local/bin/agy.exe"));
         candidates.push(profile.join("scoop/shims/agy.exe"));
     }
@@ -201,6 +206,11 @@ impl AntigravityRuntime {
         self.pending.clone()
     }
 
+    pub fn abandon_pending(&mut self) {
+        self.pending = None;
+        self.buffer.clear();
+    }
+
     fn with_diagnostics(&mut self, base: String) -> String {
         let stderr = self.stderr_tail.join(" | ");
         if stderr.is_empty() {
@@ -340,5 +350,55 @@ pub fn install_hint() -> Value {
         "install": "irm https://antigravity.google/cli/install.ps1 | iex",
         "login": "安装后在终端运行 agy 完成 Google 登录，或设置 GECIS_AGY 指向 agy.exe",
         "env": "GECIS_AGY",
+        "defaultPath": default_install_path(),
     })
+}
+
+pub fn default_install_path() -> String {
+    dirs::data_local_dir()
+        .map(|p| p.join("agy/bin/agy.exe").display().to_string())
+        .unwrap_or_else(|| "%LOCALAPPDATA%\\agy\\bin\\agy.exe".into())
+}
+
+/// Launch interactive `agy` in a new console so the user can finish Google Sign-In.
+pub fn start_interactive_login() -> Result<String, String> {
+    let locator = locate_agy()?;
+    let agy = locator.path.display().to_string();
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = Command::new("cmd");
+        command
+            .args(["/c", "start", "Gecis - Antigravity Login", &agy])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command
+            .spawn()
+            .map_err(|e| format!("无法打开登录窗口: {e}"))?;
+        Ok(format!("已打开登录窗口：{agy}\n请在新终端完成 Google 登录后回到 Gecis 重试。"))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = agy;
+        Err("当前平台请手动运行 agy 登录".into())
+    }
+}
+
+pub fn probe_version() -> Result<String, String> {
+    let locator = locate_agy()?;
+    let output = Command::new(&locator.path)
+        .arg("--help")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("无法执行 {}: {e}", locator.path.display()))?;
+    if !output.status.success() && output.stdout.is_empty() {
+        return Err(format!(
+            "{} 无法运行（exit={:?}）",
+            locator.path.display(),
+            output.status.code()
+        ));
+    }
+    Ok(locator.path.display().to_string())
 }

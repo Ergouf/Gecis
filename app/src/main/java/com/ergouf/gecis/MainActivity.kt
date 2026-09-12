@@ -127,9 +127,11 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         restorePendingState()
         runtime = AntigravityRuntime(applicationContext, tokenVault, knowledgeBase)
         (runtime as AntigravityRuntime).onConversationId = { agyId ->
-            val localId = currentConversationId ?: return@onConversationId
-            runCatching { historyStore.setAgyConversationId(localId, agyId) }
-            emitStatus("会话ID已绑定", "success")
+            val localId = currentConversationId
+            if (localId != null) {
+                runCatching { historyStore.setAgyConversationId(localId, agyId) }
+                emitStatus("会话ID已绑定", "success")
+            }
         }
         oauth = app.oauth
         oauth.setListener(this)
@@ -300,7 +302,8 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             val safeTitle = title.map { if (it.isLetterOrDigit() || it in "-_ ") it else '_' }.joinToString("")
                 .trim().ifBlank { "会话" }.take(40)
             val fileName = "Gecis-$safeTitle-$localId.${if (format.equals("html", true)) "html" else "md"}"
-            val file = java.io.File(context.getExternalFilesDir(null) ?: context.filesDir, fileName)
+            val ctx = applicationContext
+            val file = java.io.File(ctx.getExternalFilesDir(null) ?: ctx.filesDir, fileName)
             file.writeText(body)
             emitStatus("已导出 ${file.absolutePath}", "success")
             return file.absolutePath

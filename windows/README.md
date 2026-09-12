@@ -5,8 +5,10 @@ Windows 桌面子项目（Tauri 2）。当前状态：**可构建、可安装**�
 ## 快速开始
 
 ```powershell
+# 0) 若 dist/vendor 为空，先 stage 锁定 vendor
+powershell -File scripts/stage-vendor.ps1
+
 # 1) 安装依赖
-cd windows
 npm install
 
 # 2) 开发

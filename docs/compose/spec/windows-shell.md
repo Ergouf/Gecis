@@ -3,7 +3,7 @@ feature: windows-shell
 status: delivered
 updated: 2026-09-12
 branch: feat/windows-shell
-commits: 654ee66..HEAD
+commits: 654ee66bd0c8669cac56720503b80ef8ab418b54..a7ec7102ff359d8ced3fd7fe07b607d06e298a14
 ---
 
 # Windows Shell

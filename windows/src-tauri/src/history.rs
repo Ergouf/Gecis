@@ -260,16 +260,23 @@ impl HistoryStore {
             let mut conv_stmt = self
                 .conn
                 .prepare(
-                    "SELECT id, title, updated_at FROM conversations
-                     WHERE project_id=? ORDER BY updated_at DESC, id DESC",
+                    "SELECT c.id, c.title, c.updated_at,
+                            (SELECT m.content FROM messages m
+                             WHERE m.conversation_id = c.id
+                             ORDER BY m.id DESC LIMIT 1) AS last_msg
+                     FROM conversations c
+                     WHERE c.project_id = ?
+                     ORDER BY c.updated_at DESC, c.id DESC",
                 )
                 .map_err(|e| e.to_string())?;
             let conversations: Vec<Value> = conv_stmt
                 .query_map(params![project_id], |row| {
+                    let last_msg: Option<String> = row.get(3)?;
                     Ok(json!({
                         "id": row.get::<_, i64>(0)?,
                         "title": row.get::<_, String>(1)?,
                         "updatedAt": row.get::<_, i64>(2)?,
+                        "preview": last_msg.unwrap_or_default(),
                     }))
                 })
                 .map_err(|e| e.to_string())?

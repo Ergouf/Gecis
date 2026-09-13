@@ -221,7 +221,15 @@ class ChatHistoryStore(context: Context) : SQLiteOpenHelper(
                     .put("name", projectCursor.getString(1))
                 val conversations = JSONArray()
                 db.rawQuery(
-                    "SELECT id, title, updated_at FROM conversations WHERE project_id=? ORDER BY updated_at DESC, id DESC",
+                    """
+                    SELECT c.id, c.title, c.updated_at,
+                           (SELECT m.content FROM messages m
+                            WHERE m.conversation_id = c.id
+                            ORDER BY m.id DESC LIMIT 1) AS last_msg
+                    FROM conversations c
+                    WHERE c.project_id = ?
+                    ORDER BY c.updated_at DESC, c.id DESC
+                    """.trimIndent(),
                     arrayOf(projectId.toString()),
                 ).use { conversationCursor ->
                     while (conversationCursor.moveToNext()) {
@@ -229,7 +237,8 @@ class ChatHistoryStore(context: Context) : SQLiteOpenHelper(
                             JSONObject()
                                 .put("id", conversationCursor.getLong(0))
                                 .put("title", conversationCursor.getString(1))
-                                .put("updatedAt", conversationCursor.getLong(2)),
+                                .put("updatedAt", conversationCursor.getLong(2))
+                                .put("preview", conversationCursor.getString(3) ?: ""),
                         )
                     }
                 }

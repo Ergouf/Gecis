@@ -304,14 +304,14 @@ document.getElementById('historyTrigger').addEventListener('click', openDrawer);
 document.getElementById('closeDrawer').addEventListener('click', closeDrawer);
 drawerScrim.addEventListener('click', closeDrawer);
 document.getElementById('newProject').addEventListener('click', createProject);
-btnMenu.addEventListener('click', (e) => {
+btnMenu?.addEventListener('click', (e) => {
   e.stopPropagation();
   toggleMenu();
 });
 document.addEventListener('click', () => closeMenu());
-menu.addEventListener('click', (e) => e.stopPropagation());
+menu?.addEventListener('click', (e) => e.stopPropagation());
 
-menu.addEventListener('click', async (e) => {
+menu?.addEventListener('click', async (e) => {
   const btn = e.target.closest('button[data-action]');
   if (!btn) return;
   closeMenu();
@@ -321,6 +321,9 @@ menu.addEventListener('click', async (e) => {
       setStatus('请选择 fenbi.db…', 'working');
       const result = await window.GecisNative.importFenbi();
       if (result === 'cancelled') setStatus('已取消导入', 'idle');
+      else if (typeof result === 'string' && result.startsWith('started')) {
+        // Native picker launched; final status comes from onStatus.
+      }
     } else if (action === 'copyId') {
       const meta = await window.GecisNative.getConversationId();
       if (!meta?.agyConversationId) {
@@ -338,6 +341,22 @@ menu.addEventListener('click', async (e) => {
         ta.remove();
       }
       setStatus(`已复制会话 ID`, 'success');
+    } else if (action === 'resumeConversation') {
+      const id = prompt('粘贴会话 ID\n（对方「复制会话 ID」后，在此继续聊）');
+      if (id == null) return;
+      const value = id.trim();
+      if (!value) {
+        setStatus('会话 ID 不能为空', 'error');
+        return;
+      }
+      if (active) {
+        setStatus('请等待当前回答完成', 'error');
+        return;
+      }
+      setStatus('正在接入会话…', 'working');
+      const snapshot = await window.GecisNative.resumeConversation(value);
+      applySnapshot(snapshot, true);
+      closeDrawer();
     } else if (action === 'exportMd' || action === 'exportHtml') {
       const format = action === 'exportMd' ? 'md' : 'html';
       setStatus(`正在导出…`, 'working');

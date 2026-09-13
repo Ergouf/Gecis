@@ -377,6 +377,41 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             }
             return "started"
         }
+
+        /**
+         * Codex-style resume: paste an Antigravity conversation id in another device/session
+         * and continue that thread via `agy --conversation <id>`.
+         */
+        @JavascriptInterface
+        fun resumeConversation(agyId: String): String {
+            val id = agyId.trim()
+            if (id.isEmpty()) {
+                return historyErrorSnapshot(IllegalArgumentException("会话 ID 不能为空"))
+            }
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var payload: String? = null
+            runOnUiThread {
+                try {
+                    require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) {
+                        "当前消息尚未完成"
+                    }
+                    val project = currentProjectId ?: historyStore.ensureDefaultProject()
+                    val conversationId = historyStore.createConversation(project)
+                    historyStore.setAgyConversationId(conversationId, id)
+                    currentConversationId = conversationId
+                    restartRuntimeForCurrentConversation()
+                    persistPendingState()
+                    payload = historyStore.snapshot(conversationId)
+                    emitStatus("已接入共享会话，可继续提问", "success")
+                } catch (error: Throwable) {
+                    payload = historyErrorSnapshot(error)
+                    emitStatus(error.message ?: "无法续聊", "error")
+                }
+                latch.countDown()
+            }
+            latch.await(8, java.util.concurrent.TimeUnit.SECONDS)
+            return payload ?: historyErrorSnapshot(IllegalStateException("续聊超时"))
+        }
     }
 
     private fun restartRuntimeForCurrentConversation() {

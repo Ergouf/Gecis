@@ -123,6 +123,34 @@ pub fn get_conversation_id(app: AppHandle) -> Result<Value, String> {
     }))
 }
 
+/// Codex-style: paste another session's Antigravity conversation id and continue.
+#[tauri::command]
+pub fn resume_conversation(app: AppHandle, agy_id: String) -> Result<String, String> {
+    ensure_idle(&app)?;
+    let agy_id = agy_id.trim().to_string();
+    if agy_id.is_empty() {
+        return Err("会话 ID 不能为空".into());
+    }
+    if agy_id.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err("会话 ID 格式无效".into());
+    }
+    let state = app.state::<AppState>();
+    let history = state.history.lock().map_err(|e| e.to_string())?;
+    let project = *state.current_project.lock().map_err(|e| e.to_string())?;
+    let project = project.unwrap_or(history.ensure_default_project()?);
+    let conversation_id = history.create_conversation(Some(project))?;
+    history.set_agy_conversation_id(conversation_id, &agy_id)?;
+    drop(history);
+    *state.current_project.lock().map_err(|e| e.to_string())? = Some(project);
+    *state.current_conversation.lock().map_err(|e| e.to_string())? = Some(conversation_id);
+    if let Ok(mut slot) = state.runtime.lock() {
+        *slot = None;
+    }
+    emit_status(&app, "已接入共享会话，可继续提问", "success");
+    let history = state.history.lock().map_err(|e| e.to_string())?;
+    Ok(history.snapshot(Some(conversation_id))?.to_string())
+}
+
 #[tauri::command]
 pub async fn export_conversation(app: AppHandle, format: String) -> Result<String, String> {
     let app2 = app.clone();

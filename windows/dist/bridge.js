@@ -43,6 +43,9 @@
     importFenbi() {
       return invoke('import_fenbi');
     },
+    resumeConversation(agyId) {
+      return invoke('resume_conversation', { agyId });
+    },
     getConversationId() {
       return invoke('get_conversation_id');
     },

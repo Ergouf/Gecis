@@ -78,6 +78,7 @@ class AntigravityRuntime(
                     newLine()
                     flush()
                 }
+                scheduleTurnTimeout(requestId)
             } catch (error: Throwable) {
                 val active = synchronized(lock) {
                     val value = pending
@@ -94,6 +95,30 @@ class AntigravityRuntime(
         }
     }
 
+    /** Surface a stuck first turn instead of leaving the UI pending forever. */
+    private fun scheduleTurnTimeout(requestId: String) {
+        mainHandler.postDelayed({
+            val active = synchronized(lock) {
+                pending?.takeIf { it.requestId == requestId }
+            } ?: return@postDelayed
+            // First-token silence: kill and report with stderr tail.
+            val message = buildFailureMessage(
+                "AI runtime 长时间无响应（${TURN_TIMEOUT_MS / 1000}s）。" +
+                    "请检查网络、登录状态，或稍后重试。",
+            )
+            synchronized(lock) {
+                pending = null
+                try {
+                    writer?.close()
+                } catch (_: Throwable) {
+                }
+                process?.destroy()
+                resetProcessLocked()
+            }
+            mainHandler.post { active.listener.onError(active.requestId, message) }
+        }, TURN_TIMEOUT_MS)
+    }
+
     private fun ensureProcessLocked(oauthCredential: String) {
         if (process?.isAlive == true && writer != null) return
 
@@ -101,7 +126,8 @@ class AntigravityRuntime(
         stderrTail.clear()
         runtimeCredentialCaptured = false
         val spec = NativeRuntimeSpec.resolve(context)
-        val mcpUrl = knowledgeBase?.let { kb ->
+        // Only attach MCP when a real fenbi.db exists; otherwise agy may stall on first turn.
+        val mcpUrl = knowledgeBase?.takeIf { it.hasDatabase() }?.let { kb ->
             val server = mcpServer ?: FenbiMcpHttpServer(kb).also { mcpServer = it }
             if (server.port == 0) server.start()
             "http://127.0.0.1:${server.port}/mcp"
@@ -339,6 +365,7 @@ class AntigravityRuntime(
 
     companion object {
         private const val TAG = "GecisRuntime"
+        private const val TURN_TIMEOUT_MS = 45_000L
         private const val STDERR_TAIL_LINES = 6
         private const val MAX_STDERR_LINE_CHARS = 240
         private val TERMINAL_ERRORS = setOf("ERROR", "CANCELED", "INTERRUPTED", "INVALID")

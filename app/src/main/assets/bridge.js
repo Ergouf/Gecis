@@ -20,6 +20,12 @@
     getHistory() {
       return call(() => native.getHistory());
     },
+    getSetupStatus() {
+      return call(() => {
+        const raw = native.getSetupStatus();
+        return typeof raw === 'string' ? JSON.parse(raw) : raw;
+      });
+    },
     createProject(name) {
       return call(() => native.createProject(String(name)));
     },

@@ -370,6 +370,57 @@ pub fn runtime_status() -> Result<Value, String> {
     }
 }
 
+/// Setup checklist for the empty state: hide steps the user already finished.
+#[tauri::command]
+pub fn get_setup_status(app: AppHandle) -> Result<Value, String> {
+    let has_agy = locate_agy().is_ok();
+    let logged_in = has_agy && windows_agy_logged_in();
+    let has_fenbi = {
+        let state = app.state::<AppState>();
+        let result = state
+            .knowledge
+            .lock()
+            .map(|k| k.has_database())
+            .unwrap_or(false);
+        result
+    };
+    Ok(json!({
+        "agyInstalled": has_agy,
+        "loggedIn": logged_in,
+        "hasFenbi": has_fenbi,
+    }))
+}
+
+/// Heuristic: Antigravity stores OAuth material under the user profile `.gemini` tree.
+fn windows_agy_logged_in() -> bool {
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    let roots = [
+        home.join(".gemini/antigravity-cli"),
+        home.join(".gemini"),
+    ];
+    let names = [
+        "antigravity-oauth-token",
+        "jetski-standalone-oauth-token",
+        "oauth-token",
+    ];
+    for root in roots {
+        for name in names {
+            let p = root.join(name);
+            if p.is_file() {
+                if let Ok(meta) = p.metadata() {
+                    if meta.len() > 16 {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    // Settings or conversation cache existing is a weaker signal; only count non-empty token files.
+    false
+}
+
 #[tauri::command]
 pub fn start_login(app: AppHandle) -> Result<String, String> {
     match start_background_login() {

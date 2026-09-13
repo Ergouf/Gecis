@@ -66,6 +66,7 @@ pub fn run() {
             commands::get_conversation_id,
             commands::export_conversation,
             commands::resume_conversation,
+            commands::get_setup_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Gecis Windows application");

@@ -265,6 +265,24 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         }.getOrElse { historyErrorSnapshot(it) }
 
         @JavascriptInterface
+        fun getSetupStatus(): String {
+            return try {
+                JSONObject()
+                    .put("agyInstalled", true)
+                    .put("loggedIn", tokenVault.hasCredential())
+                    .put("hasFenbi", knowledgeBase.hasDatabase())
+                    .toString()
+            } catch (error: Throwable) {
+                JSONObject()
+                    .put("agyInstalled", true)
+                    .put("loggedIn", false)
+                    .put("hasFenbi", false)
+                    .put("error", error.message)
+                    .toString()
+            }
+        }
+
+        @JavascriptInterface
         fun createProject(name: String): String = runCatching {
             require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) { "当前消息尚未完成" }
             val projectId = historyStore.createProject(name)

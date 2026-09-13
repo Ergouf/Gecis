@@ -304,14 +304,14 @@ document.getElementById('historyTrigger').addEventListener('click', openDrawer);
 document.getElementById('closeDrawer').addEventListener('click', closeDrawer);
 drawerScrim.addEventListener('click', closeDrawer);
 document.getElementById('newProject').addEventListener('click', createProject);
-btnMenu.addEventListener('click', (e) => {
+btnMenu?.addEventListener('click', (e) => {
   e.stopPropagation();
   toggleMenu();
 });
 document.addEventListener('click', () => closeMenu());
-menu.addEventListener('click', (e) => e.stopPropagation());
+menu?.addEventListener('click', (e) => e.stopPropagation());
 
-menu.addEventListener('click', async (e) => {
+menu?.addEventListener('click', async (e) => {
   const btn = e.target.closest('button[data-action]');
   if (!btn) return;
   closeMenu();
@@ -321,6 +321,9 @@ menu.addEventListener('click', async (e) => {
       setStatus('请选择 fenbi.db…', 'working');
       const result = await window.GecisNative.importFenbi();
       if (result === 'cancelled') setStatus('已取消导入', 'idle');
+      else if (typeof result === 'string' && result.startsWith('started')) {
+        // Native picker launched; final status comes from onStatus.
+      }
     } else if (action === 'copyId') {
       const meta = await window.GecisNative.getConversationId();
       if (!meta?.agyConversationId) {

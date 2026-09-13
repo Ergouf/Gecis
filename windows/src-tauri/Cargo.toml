@@ -1,6 +1,6 @@
 [package]
 name = "gecis-windows"
-version = "0.1.0"
+version = "0.3.1"
 description = "Gecis Windows desktop shell"
 authors = ["Gecis"]
 edition = "2021"
@@ -19,7 +19,7 @@ path = "src/bin/e2e_chat.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["image-png"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }

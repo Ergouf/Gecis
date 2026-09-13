@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -68,10 +68,11 @@ jobs:
           ORG_GRADLE_PROJECT_GECIS_SIGNING_STORE_PASSWORD: ${{ secrets.GECIS_SIGNING_STORE_PASSWORD }}
           ORG_GRADLE_PROJECT_GECIS_SIGNING_KEY_ALIAS: ${{ secrets.GECIS_SIGNING_KEY_ALIAS }}
           ORG_GRADLE_PROJECT_GECIS_SIGNING_KEY_PASSWORD: ${{ secrets.GECIS_SIGNING_KEY_PASSWORD }}
-        run: ./gradlew :app:assembleRelease --no-daemon
+        run: ./gradlew :app:lintRelease :app:assembleRelease --no-daemon
 
       - name: Verify APK signature
         run: |
+          set -euo pipefail
           APK="app/build/outputs/apk/release/app-release.apk"
           if [ ! -s "$APK" ]; then
             echo "Expected signed release APK not found: $APK" >&2
@@ -82,8 +83,10 @@ jobs:
 
       - name: Rename artifact
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          cp "app/build/outputs/apk/release/app-release.apk" "Gecis-v${VERSION}-arm64.apk"
+          APK="app/build/outputs/apk/release/app-release.apk"
+          cp "$APK" "Gecis-v${VERSION}-arm64.apk"
           ls -lh "Gecis-v${VERSION}-arm64.apk"
 
       - name: Create GitHub Release

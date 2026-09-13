@@ -1,13 +1,17 @@
 // GecisNative bridge: Tauri invoke shim preserving the Android WebView contract.
 (() => {
+  document.body.dataset.platform = 'windows';
   const api = window.__TAURI__;
   if (!api?.core?.invoke) {
     window.GecisNative = {
       sendMessage() { throw new Error('Tauri bridge 未就绪'); },
+      retryMessage() { throw new Error('Tauri bridge 未就绪'); },
       getHistory() { throw new Error('Tauri bridge 未就绪'); },
       createProject() { throw new Error('Tauri bridge 未就绪'); },
       newConversation() { throw new Error('Tauri bridge 未就绪'); },
       openConversation() { throw new Error('Tauri bridge 未就绪'); },
+      moveConversation() { throw new Error('Tauri bridge 未就绪'); },
+      deleteConversation() { throw new Error('Tauri bridge 未就绪'); },
     };
     return;
   }
@@ -18,6 +22,9 @@
   window.GecisNative = {
     sendMessage(requestId, text) {
       return invoke('send_message', { requestId, text });
+    },
+    retryMessage(requestId, text) {
+      return invoke('retry_message', { requestId, text });
     },
     getHistory() {
       return invoke('get_history');
@@ -31,11 +38,17 @@
     openConversation(conversationId) {
       return invoke('open_conversation', { conversationId });
     },
+    moveConversation(conversationId, projectId) {
+      return invoke('move_conversation', { conversationId, projectId });
+    },
+    deleteConversation(conversationId) {
+      return invoke('delete_conversation', { conversationId });
+    },
     runtimeStatus() {
       return invoke('runtime_status');
     },
-    startLogin() {
-      return invoke('start_login');
+    startLogin(requestId) {
+      return invoke('start_login', { requestId: requestId || null });
     },
     installRuntime() {
       return invoke('install_runtime');

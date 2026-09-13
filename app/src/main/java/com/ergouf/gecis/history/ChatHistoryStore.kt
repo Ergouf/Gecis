@@ -204,6 +204,13 @@ class ChatHistoryStore(context: Context) : SQLiteOpenHelper(
     }
 
     @Synchronized
+    fun deleteConversation(conversationId: Long) {
+        val db = writableDatabase
+        require(conversationExists(db, conversationId)) { "历史会话不存在：$conversationId" }
+        db.execSQL("DELETE FROM conversations WHERE id=?", arrayOf(conversationId))
+    }
+
+    @Synchronized
     fun snapshot(currentConversationId: Long?): String {
         val db = readableDatabase
         val current = currentConversationId?.takeIf { conversationExists(db, it) }

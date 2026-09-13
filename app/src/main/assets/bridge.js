@@ -1,5 +1,6 @@
 // Android WebView bridge: GecisNative is injected by MainActivity.
 (() => {
+  document.body.dataset.platform = 'android';
   if (!window.__GECIS_NATIVE__ && !window.GecisNative?.sendMessage) {
     window.GecisBridgeReady = Promise.reject(new Error('原生桥未连接'));
     return;
@@ -15,6 +16,12 @@
   };
   window.GecisNative = {
     sendMessage(requestId, text) {
+      return call(() => native.sendMessage(String(requestId), String(text)));
+    },
+    retryMessage(requestId, text) {
+      if (typeof native.retryMessage === 'function') {
+        return call(() => native.retryMessage(String(requestId), String(text)));
+      }
       return call(() => native.sendMessage(String(requestId), String(text)));
     },
     getHistory() {
@@ -35,6 +42,12 @@
     openConversation(conversationId) {
       return call(() => native.openConversation(Number(conversationId)));
     },
+    moveConversation(conversationId, projectId) {
+      return call(() => native.moveConversation(Number(conversationId), Number(projectId)));
+    },
+    deleteConversation(conversationId) {
+      return call(() => native.deleteConversation(Number(conversationId)));
+    },
     getConversationId() {
       return call(() => {
         const raw = native.getConversationId();
@@ -54,8 +67,8 @@
         return typeof raw === 'string' ? JSON.parse(raw) : raw;
       });
     },
-    startLogin() {
-      return call(() => native.startLogin());
+    startLogin(requestId) {
+      return call(() => native.startLogin(requestId == null ? '' : String(requestId)));
     },
     installRuntime() {
       return Promise.resolve('Android 使用内嵌引擎');

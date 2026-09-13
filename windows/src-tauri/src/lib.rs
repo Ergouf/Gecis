@@ -7,7 +7,14 @@ use history::HistoryStore;
 use knowledge::KnowledgeBase;
 use runtime::AntigravityRuntime;
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::image::Image;
+use tauri::{Emitter, Manager};
+
+#[derive(Clone)]
+pub struct PendingRequest {
+    pub request_id: String,
+    pub text: String,
+}
 
 /// Used by `cargo run --bin e2e_chat` for end-to-end verification.
 pub fn runtime_e2e(prompt: &str, timeout: std::time::Duration) -> Result<String, String> {
@@ -20,6 +27,8 @@ pub struct AppState {
     pub runtime: Mutex<Option<AntigravityRuntime>>,
     pub current_conversation: Mutex<Option<i64>>,
     pub current_project: Mutex<Option<i64>>,
+    pub pending_auth: Mutex<Option<PendingRequest>>,
+    pub auth_status: Mutex<String>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -28,6 +37,13 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                // Keep a 256 px source for the live window icon. Passing the
+                // default 32 px bitmap makes Windows upscale it on high-DPI
+                // taskbars and visibly softens the fox.
+                let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
+                window.set_icon(icon)?;
+            }
             let data_dir = app
                 .path()
                 .app_data_dir()
@@ -39,26 +55,38 @@ pub fn run() {
             let default_project = history
                 .ensure_default_project()
                 .map_err(|e| format!("默认项目创建失败: {e}"))?;
-            // Best-effort: make sure fenbi MCP exists so the model can search on its own.
-            if let Ok(locator) = runtime::locate_agy() {
-                let _ = runtime::ensure_fenbi_mcp(&locator.path);
-            }
             app.manage(AppState {
                 history: Mutex::new(history),
                 knowledge: Mutex::new(knowledge),
                 runtime: Mutex::new(None),
                 current_conversation: Mutex::new(None),
                 current_project: Mutex::new(Some(default_project)),
+                pending_auth: Mutex::new(None),
+                auth_status: Mutex::new("unknown".into()),
+            });
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                // Startup must not launch CLI probes: CLI bootstrap may spawn its own
+                // console children. Authentication is resolved by the first real request.
+                let state = app_handle.state::<AppState>();
+                let auth = state.auth_status.lock().map(|v| v.clone()).unwrap_or_else(|_| "unknown".into());
+                let _ = app_handle.emit(
+                    "gecis://native-event",
+                    serde_json::json!({"type":"setup_status","platform":"windows","auth":auth}),
+                );
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::bridge_ready,
             commands::send_message,
+            commands::retry_message,
             commands::get_history,
             commands::create_project,
             commands::new_conversation,
             commands::open_conversation,
+            commands::move_conversation,
+            commands::delete_conversation,
             commands::runtime_status,
             commands::start_login,
             commands::install_runtime,

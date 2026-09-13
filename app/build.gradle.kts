@@ -22,8 +22,8 @@ android {
         applicationId = "com.ergouf.gecis"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "0.3.0"
+        versionCode = 17
+        versionName = "0.3.2"
 
         ndk {
             abiFilters += listOf("arm64-v8a")

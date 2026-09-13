@@ -1,19 +1,71 @@
-from PIL import Image
-import os
+"""Resample the shared fox artwork into Android and Windows launcher assets.
 
-src = r"D:\workspace\Gecis-worktrees\windows-tech\app\src\main\res\mipmap-xxxhdpi\ic_launcher.png"
-round_src = r"D:\workspace\Gecis-worktrees\windows-tech\app\src\main\res\mipmap-xxxhdpi\ic_launcher_round.png"
-out = r"D:\workspace\Gecis-worktrees\windows-tech\windows\src-tauri\icons"
-os.makedirs(out, exist_ok=True)
+Usage: python windows/scripts/make_icons.py (requires Pillow).
+"""
+from pathlib import Path
+from PIL import Image, ImageDraw
 
-path = round_src if os.path.exists(round_src) else src
-base = Image.open(path).convert("RGBA")
+ROOT = Path(__file__).resolve().parents[2]
+BRANDING = ROOT / "assets/branding"
+RES = ROOT / "app/src/main/res"
+WINDOWS = ROOT / "windows/src-tauri/icons"
+SIZE = 1024
 
-base.resize((32, 32), Image.Resampling.LANCZOS).save(os.path.join(out, "32x32.png"))
-base.resize((128, 128), Image.Resampling.LANCZOS).save(os.path.join(out, "128x128.png"))
-base.resize((256, 256), Image.Resampling.LANCZOS).save(os.path.join(out, "icon.png"))
-base.resize((256, 256), Image.Resampling.LANCZOS).save(
-    os.path.join(out, "icon.ico"),
-    sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
-)
-print("ok", sorted(os.listdir(out)))
+
+def foreground(art, coverage):
+    layer = Image.new("RGBA", (SIZE, SIZE))
+    mark = art.copy()
+    mark.thumbnail((round(SIZE * coverage), round(SIZE * coverage)), Image.Resampling.LANCZOS)
+    layer.alpha_composite(mark, ((SIZE - mark.width) // 2, (SIZE - mark.height) // 2))
+    return layer
+
+
+def tile(art, circular=False, coverage=.76):
+    result = Image.new("RGBA", (SIZE, SIZE), "#202126")
+    result.alpha_composite(foreground(art, coverage))
+    mask = Image.new("L", result.size)
+    draw = ImageDraw.Draw(mask)
+    if circular:
+        draw.ellipse((0, 0, SIZE - 1, SIZE - 1), fill=255)
+    else:
+        draw.rounded_rectangle((0, 0, SIZE - 1, SIZE - 1), radius=SIZE * .22, fill=255)
+    result.putalpha(mask)
+    return result
+
+
+def save_at(image, path, size):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.resize((size, size), Image.Resampling.LANCZOS).save(path)
+
+
+def main():
+    source = Image.open(BRANDING / "fox-master.png").convert("RGBA")
+    alpha = source.getchannel("A")
+    if alpha.getextrema()[0] == 255:
+        raise ValueError("Fox master must have a transparent background")
+    art = source.crop(alpha.getbbox())
+    square = tile(art)
+    round_icon = tile(art, circular=True)
+    windows_square = tile(art, coverage=.86)
+    adaptive = foreground(art, .59)
+    monochrome = Image.new("RGBA", adaptive.size, "white")
+    monochrome.putalpha(adaptive.getchannel("A"))
+    square.save(BRANDING / "app-icon.png")
+    save_at(square, ROOT / "app/src/main/ic_launcher-web.png", 512)
+    for density, size, adaptive_size in [
+        ("mdpi", 48, 108), ("hdpi", 72, 162), ("xhdpi", 96, 216),
+        ("xxhdpi", 144, 324), ("xxxhdpi", 192, 432),
+    ]:
+        folder = RES / f"mipmap-{density}"
+        save_at(square, folder / "ic_launcher.png", size)
+        save_at(round_icon, folder / "ic_launcher_round.png", size)
+        save_at(adaptive, folder / "ic_launcher_foreground.png", adaptive_size)
+        save_at(monochrome, folder / "ic_launcher_monochrome.png", adaptive_size)
+    for filename, size in [("32x32.png", 32), ("128x128.png", 128), ("icon.png", 256)]:
+        save_at(windows_square, WINDOWS / filename, size)
+    windows_square.save(WINDOWS / "icon.ico", sizes=[(s, s) for s in (16, 24, 32, 48, 64, 128, 256)])
+    print("Generated unified fox icons for Android and Windows")
+
+
+if __name__ == "__main__":
+    main()

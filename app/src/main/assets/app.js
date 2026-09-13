@@ -341,6 +341,22 @@ menu?.addEventListener('click', async (e) => {
         ta.remove();
       }
       setStatus(`已复制会话 ID`, 'success');
+    } else if (action === 'resumeConversation') {
+      const id = prompt('粘贴会话 ID\n（对方「复制会话 ID」后，在此继续聊）');
+      if (id == null) return;
+      const value = id.trim();
+      if (!value) {
+        setStatus('会话 ID 不能为空', 'error');
+        return;
+      }
+      if (active) {
+        setStatus('请等待当前回答完成', 'error');
+        return;
+      }
+      setStatus('正在接入会话…', 'working');
+      const snapshot = await window.GecisNative.resumeConversation(value);
+      applySnapshot(snapshot, true);
+      closeDrawer();
     } else if (action === 'exportMd' || action === 'exportHtml') {
       const format = action === 'exportMd' ? 'md' : 'html';
       setStatus(`正在导出…`, 'working');

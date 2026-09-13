@@ -42,6 +42,12 @@
     importFenbi() {
       return call(() => native.importFenbi());
     },
+    resumeConversation(agyId) {
+      return call(() => {
+        const raw = native.resumeConversation(String(agyId || ''));
+        return typeof raw === 'string' ? JSON.parse(raw) : raw;
+      });
+    },
     startLogin() {
       return call(() => native.startLogin());
     },

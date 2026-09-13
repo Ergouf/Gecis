@@ -1,44 +1,53 @@
 // Android WebView bridge: GecisNative is injected by MainActivity.
 (() => {
-  if (!window.GecisNative?.sendMessage) {
+  if (!window.__GECIS_NATIVE__ && !window.GecisNative?.sendMessage) {
     window.GecisBridgeReady = Promise.reject(new Error('原生桥未连接'));
     return;
   }
-  const native = window.GecisNative;
+  const native = window.__GECIS_NATIVE__ || window.GecisNative;
+  const call = (fn) => {
+    try {
+      const v = fn();
+      return Promise.resolve(v);
+    } catch (e) {
+      return Promise.reject(e instanceof Error ? e : new Error(String(e)));
+    }
+  };
   window.GecisNative = {
     sendMessage(requestId, text) {
-      try { native.sendMessage(requestId, text); return Promise.resolve(); }
-      catch (e) { return Promise.reject(e); }
+      return call(() => native.sendMessage(String(requestId), String(text)));
     },
     getHistory() {
-      try { return Promise.resolve(native.getHistory()); }
-      catch (e) { return Promise.reject(e); }
+      return call(() => native.getHistory());
     },
     createProject(name) {
-      try { return Promise.resolve(native.createProject(name)); }
-      catch (e) { return Promise.reject(e); }
+      return call(() => native.createProject(String(name)));
     },
     newConversation(projectId) {
-      try { return Promise.resolve(native.newConversation(projectId)); }
-      catch (e) { return Promise.reject(e); }
+      return call(() => native.newConversation(Number(projectId)));
     },
     openConversation(conversationId) {
-      try { return Promise.resolve(native.openConversation(conversationId)); }
-      catch (e) { return Promise.reject(e); }
+      return call(() => native.openConversation(Number(conversationId)));
     },
     getConversationId() {
-      try {
+      return call(() => {
         const raw = native.getConversationId();
-        return Promise.resolve(typeof raw === 'string' ? JSON.parse(raw) : raw);
-      } catch (e) { return Promise.reject(e); }
+        return typeof raw === 'string' ? JSON.parse(raw) : raw;
+      });
     },
     exportConversation(format) {
-      try { return Promise.resolve(native.exportConversation(String(format || 'md'))); }
-      catch (e) { return Promise.reject(e); }
+      return call(() => native.exportConversation(String(format || 'md')));
     },
-    importFenbi() { return Promise.resolve('skipped'); },
-    startLogin() { return Promise.resolve('请在系统浏览器完成 Google 登录'); },
-    installRuntime() { return Promise.resolve('Android 使用内嵌引擎'); },
+    // Opens system file picker and imports fenbi.db. Returns "ok:<name>" | "cancelled" | throws.
+    importFenbi() {
+      return call(() => native.importFenbi());
+    },
+    startLogin() {
+      return call(() => native.startLogin());
+    },
+    installRuntime() {
+      return Promise.resolve('Android 使用内嵌引擎');
+    },
   };
   window.GecisBridgeReady = Promise.resolve();
 })();

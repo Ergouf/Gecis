@@ -58,6 +58,9 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private var lastImeBottom = 0
     private var pageReady = false
 
+    /** Menu-driven import: no chat message is waiting. */
+    private var fenbiImportOnly = false
+
     private val openFenbiDatabase = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         handleFenbiDatabasePicked(uri)
     }
@@ -67,17 +70,28 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     }
 
     private fun handleFenbiDatabasePicked(uri: Uri?) {
-        val pending = pendingAfterDatabase ?: return
+        val importOnly = fenbiImportOnly
+        val pending = pendingAfterDatabase
+        if (!importOnly && pending == null) {
+            // Unexpected callback; ignore.
+            return
+        }
+
         if (uri == null) {
-            pendingAfterDatabase = null
-            persistPendingState()
-            emitStatus("未选择 fenbi.db", "error")
-            onError(pending.requestId, "未选择 fenbi.db")
+            fenbiImportOnly = false
+            if (pending != null) {
+                pendingAfterDatabase = null
+                persistPendingState()
+                emitStatus("未选择 fenbi.db", "error")
+                onError(pending.requestId, "未选择 fenbi.db")
+            } else {
+                emitStatus("已取消导入", "idle")
+            }
             return
         }
 
         val displayName = knowledgeBase.importedDisplayName(uri) ?: "fenbi.db"
-        emitStatus("正在准备导入 $displayName…", "working")
+        emitStatus("正在导入 $displayName…", "working")
         importWorker.execute {
             try {
                 knowledgeBase.importFrom(uri) { progress ->
@@ -90,21 +104,28 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                 }
                 runOnUiThread {
                     if (isDestroyed) return@runOnUiThread
-                    if (pendingAfterDatabase?.requestId != pending.requestId) return@runOnUiThread
-                    pendingAfterDatabase = null
-                    persistPendingState()
-                    emitStatus("$displayName 导入成功", "success")
-                    persistUserMessageThenContinue(pending)
+                    fenbiImportOnly = false
+                    if (pendingAfterDatabase != null && pendingAfterDatabase?.requestId == pending?.requestId) {
+                        pendingAfterDatabase = null
+                        persistPendingState()
+                        emitStatus("$displayName 导入成功", "success")
+                        persistUserMessageThenContinue(pending!!)
+                    } else {
+                        emitStatus("$displayName 导入成功", "success")
+                    }
                 }
             } catch (error: Throwable) {
                 runOnUiThread {
                     if (isDestroyed) return@runOnUiThread
-                    if (pendingAfterDatabase?.requestId == pending.requestId) {
+                    fenbiImportOnly = false
+                    val message = error.message ?: "fenbi.db 导入失败"
+                    if (pendingAfterDatabase != null && pendingAfterDatabase?.requestId == pending?.requestId) {
                         pendingAfterDatabase = null
                         persistPendingState()
-                        val message = error.message ?: "fenbi.db 导入失败"
                         emitStatus("导入失败：$message", "error")
-                        onError(pending.requestId, message)
+                        onError(pending!!.requestId, message)
+                    } else {
+                        emitStatus("导入失败：$message", "error")
                     }
                 }
             }
@@ -307,6 +328,44 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             file.writeText(body)
             emitStatus("已导出 ${file.absolutePath}", "success")
             return file.absolutePath
+        }
+
+        @JavascriptInterface
+        fun importFenbi(): String {
+            // Must launch picker on UI thread; this interface runs on a binder thread.
+            runOnUiThread {
+                try {
+                    if (inflight != null || pendingAfterAuth != null || pendingAfterDatabase != null) {
+                        emitStatus("请等待当前消息完成后再导入题库", "error")
+                        return@runOnUiThread
+                    }
+                    fenbiImportOnly = true
+                    emitStatus("请选择 fenbi.db 文件…", "working")
+                    try {
+                        openFenbiDatabase.launch(arrayOf("*/*"))
+                    } catch (primary: Throwable) {
+                        try {
+                            val intent = Intent(Intent.ACTION_GET_CONTENT)
+                                .addCategory(Intent.CATEGORY_OPENABLE)
+                                .setType("*/*")
+                            fallbackFenbiDatabase.launch(intent)
+                        } catch (fallback: Throwable) {
+                            fenbiImportOnly = false
+                            emitStatus("无法打开文件选择器：${fallback.message ?: primary.message}", "error")
+                        }
+                    }
+                } catch (error: Throwable) {
+                    fenbiImportOnly = false
+                    emitStatus("导入失败：${error.message}", "error")
+                }
+            }
+            return "started"
+        }
+
+        @JavascriptInterface
+        fun startLogin(): String {
+            emitStatus("请使用系统浏览器完成 Google 登录", "working")
+            return "请使用系统浏览器完成 Google 登录"
         }
     }
 

@@ -5,6 +5,32 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
+/// All app-owned CLI processes must run without allocating a Windows console.
+pub(crate) fn background_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    command
+}
+
+#[cfg(all(test, windows))]
+mod background_process_tests {
+    #[test]
+    fn child_process_has_no_console_window() {
+        let output = super::background_command("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command",
+                "Add-Type -Name ConsoleProbe -Namespace Gecis -MemberDefinition '[DllImport(\"kernel32.dll\")] public static extern IntPtr GetConsoleWindow();'; [Gecis.ConsoleProbe]::GetConsoleWindow().ToInt64()"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("launch hidden child");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0");
+    }
+}
+
 pub enum RuntimeEvent {
     Status { text: String, state: String },
     Delta { request_id: String, text: String },
@@ -79,6 +105,36 @@ pub fn locate_agy() -> Result<AgyLocator, String> {
     )
 }
 
+/// Uses the CLI itself as the source of truth instead of guessing credential file names.
+/// The process is time-bounded so startup can run this probe in the background.
+pub fn probe_authentication(timeout: std::time::Duration) -> bool {
+    let Ok(locator) = locate_agy() else { return false };
+    let mut command = background_command(locator.path);
+    command
+        .arg("models")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let Ok(mut child) = command.spawn() else { return false };
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+            Err(_) => return false,
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    false
+}
+
 pub struct AntigravityRuntime {
     child: Child,
     stdin: ChildStdin,
@@ -100,7 +156,7 @@ impl AntigravityRuntime {
         ensure_fenbi_mcp(&locator.path)?;
         write_agent_instructions(&workdir)?;
 
-        let mut command = Command::new(&locator.path);
+        let mut command = background_command(&locator.path);
         let mut args = vec![
             "--input-format".to_string(),
             "stream-json".to_string(),
@@ -390,7 +446,14 @@ pub fn fenbi_db_path() -> Option<PathBuf> {
 }
 
 fn python_exe() -> Option<PathBuf> {
+    // The CLI launches MCP children itself; our CREATE_NO_WINDOW flag does not
+    // control those grandchildren. Prefer Python's GUI-subsystem executable.
+    if let Ok(p) = which::which("pythonw.exe") {
+        return Some(p);
+    }
     if let Ok(p) = which::which("python") {
+        let windowless = p.with_file_name("pythonw.exe");
+        if windowless.is_file() { return Some(windowless); }
         return Some(p);
     }
     if let Ok(p) = which::which("python3") {
@@ -431,7 +494,7 @@ fn fenbi_mcp_script() -> PathBuf {
 }
 
 /// Register local fenbi MCP so **the model** chooses when and what to search.
-pub fn ensure_fenbi_mcp(agy: &std::path::Path) -> Result<(), String> {
+pub fn ensure_fenbi_mcp(_agy: &std::path::Path) -> Result<(), String> {
     let Some(python) = python_exe() else {
         eprintln!("fenbi MCP: python not found; model will not have search_fenbi tool");
         return Ok(());
@@ -481,20 +544,8 @@ pub fn ensure_fenbi_mcp(agy: &std::path::Path) -> Result<(), String> {
     std::fs::write(&config_path, serde_json::to_string_pretty(&root).unwrap_or_default())
         .map_err(|e| format!("写入 MCP 配置失败: {e}"))?;
 
-    // Also register via CLI so status listing stays consistent.
-    let _ = Command::new(agy)
-        .args([
-            "mcp",
-            "add",
-            "gecis-fenbi",
-            "--",
-            &python.display().to_string(),
-            &script.display().to_string(),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    // The configuration above is the registration; a second CLI invocation is
+    // redundant and can start bootstrap console processes on a fresh install.
     Ok(())
 }
 
@@ -564,7 +615,7 @@ fn open_url_hidden(url: &str) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         // explorer.exe reliably opens the default browser without a console flash.
-        let ok = Command::new("explorer.exe")
+        let ok = background_command("explorer.exe")
             .arg(url)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -575,7 +626,7 @@ fn open_url_hidden(url: &str) -> Result<(), String> {
         if ok {
             return Ok(());
         }
-        Command::new("rundll32")
+        background_command("rundll32")
             .args(["url.dll,FileProtocolHandler", url])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -597,7 +648,7 @@ fn open_url_hidden(url: &str) -> Result<(), String> {
 /// an OAuth URL, we open that URL ourselves via explorer.exe.
 pub fn start_background_login() -> Result<String, String> {
     let locator = locate_agy()?;
-    let mut command = Command::new(&locator.path);
+    let mut command = background_command(&locator.path);
     // Interactive start is what triggers Antigravity's local browser Sign-In.
     // Avoid --print here: headless print mode often never opens a browser.
     command
@@ -689,23 +740,4 @@ fn extract_oauth_url(line: &str) -> Option<String> {
         }
     }
     fallback
-}
-
-pub fn probe_version() -> Result<String, String> {
-    let locator = locate_agy()?;
-    let output = Command::new(&locator.path)
-        .arg("--help")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("无法执行 {}: {e}", locator.path.display()))?;
-    if !output.status.success() && output.stdout.is_empty() {
-        return Err(format!(
-            "{} 无法运行（exit={:?}）",
-            locator.path.display(),
-            output.status.code()
-        ));
-    }
-    Ok(locator.path.display().to_string())
 }

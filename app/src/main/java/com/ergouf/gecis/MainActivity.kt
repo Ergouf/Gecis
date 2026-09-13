@@ -268,12 +268,25 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         fun getSetupStatus(): String {
             return try {
                 JSONObject()
+                    .put("platform", "android")
+                    .put("runtime", "ready")
+                    .put("auth", if (tokenVault.hasCredential()) "connected" else "required")
+                    .put(
+                        "knowledge",
+                        JSONObject()
+                            .put("available", knowledgeBase.hasDatabase())
+                            .put("name", if (knowledgeBase.hasDatabase()) "fenbi.db" else JSONObject.NULL),
+                    )
                     .put("agyInstalled", true)
                     .put("loggedIn", tokenVault.hasCredential())
                     .put("hasFenbi", knowledgeBase.hasDatabase())
                     .toString()
             } catch (error: Throwable) {
                 JSONObject()
+                    .put("platform", "android")
+                    .put("runtime", "ready")
+                    .put("auth", "unknown")
+                    .put("knowledge", JSONObject().put("available", false).put("name", JSONObject.NULL))
                     .put("agyInstalled", true)
                     .put("loggedIn", false)
                     .put("hasFenbi", false)
@@ -309,6 +322,27 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             require(historyStore.conversationExists(conversationId)) { "历史会话不存在" }
             currentConversationId = conversationId
             restartRuntimeForCurrentConversation()
+            persistPendingState()
+            historyStore.snapshot(currentConversationId)
+        }.getOrElse { historyErrorSnapshot(it) }
+
+        @JavascriptInterface
+        fun moveConversation(conversationId: Long, projectId: Long): String = runCatching {
+            require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) { "当前消息尚未完成" }
+            historyStore.moveConversation(conversationId, projectId)
+            if (currentConversationId == conversationId) currentProjectId = projectId
+            persistPendingState()
+            historyStore.snapshot(currentConversationId)
+        }.getOrElse { historyErrorSnapshot(it) }
+
+        @JavascriptInterface
+        fun deleteConversation(conversationId: Long): String = runCatching {
+            require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) { "当前消息尚未完成" }
+            historyStore.deleteConversation(conversationId)
+            if (currentConversationId == conversationId) {
+                currentConversationId = null
+                restartRuntimeForCurrentConversation()
+            }
             persistPendingState()
             historyStore.snapshot(currentConversationId)
         }.getOrElse { historyErrorSnapshot(it) }
@@ -381,10 +415,11 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         }
 
         @JavascriptInterface
-        fun startLogin(): String {
+        fun startLogin(requestId: String): String {
             runOnUiThread {
                 if (tokenVault.hasCredential()) {
                     emitStatus("已登录 Google 账号", "success")
+                    resumePendingIfReady()
                     return@runOnUiThread
                 }
                 emitStatus("正在打开 Google 登录…", "working")
@@ -394,6 +429,19 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                 }
             }
             return "started"
+        }
+
+        @JavascriptInterface
+        fun retryMessage(requestId: String, text: String) {
+            runOnUiThread {
+                try {
+                    require(inflight == null) { "当前消息尚未完成" }
+                    val pending = PendingChatMessage(requestId, text, currentConversationId)
+                    continueMessage(pending)
+                } catch (error: Throwable) {
+                    onError(requestId, error.message ?: "重试失败")
+                }
+            }
         }
 
         /**
@@ -587,7 +635,16 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             emitStatus("正在检索并思考…", "working")
             runtime.send(message.requestId, message.text, this)
         } else {
-            beginGoogleOAuth(message)
+            pendingAfterAuth = message
+            persistPendingState()
+            emitActionRequired(
+                requestId = message.requestId,
+                kind = "auth",
+                title = "需要连接 Google 账号",
+                message = "连接账号后会自动继续刚才的问题。",
+                actions = arrayOf("login"),
+            )
+            emitStatus("等待连接 Google 账号", "idle")
         }
     }
 
@@ -629,7 +686,19 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             val message = inflight?.takeIf { it.requestId == requestId }
             inflight = null
             persistPendingState()
-            if (message != null) beginGoogleOAuth(message) else onError(requestId, "Google 登录已失效，请重新登录")
+            if (message != null) {
+                pendingAfterAuth = message
+                persistPendingState()
+                emitActionRequired(
+                    requestId = requestId,
+                    kind = "auth",
+                    title = "Google 登录已失效",
+                    message = "重新连接后会自动继续刚才的问题。",
+                    actions = arrayOf("login"),
+                )
+            } else {
+                onError(requestId, "Google 登录已失效，请重新登录")
+            }
         }
     }
 
@@ -646,7 +715,17 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         pendingAfterAuth = null
         persistPendingState()
         emitStatus("Google 登录失败：$message", "error")
-        if (pending != null) onError(pending.requestId, message)
+        if (pending != null) {
+            pendingAfterAuth = pending
+            persistPendingState()
+            emitActionRequired(
+                requestId = pending.requestId,
+                kind = "auth",
+                title = "账号连接没有完成",
+                message = message,
+                actions = arrayOf("login"),
+            )
+        }
     }
 
     override fun onDelta(requestId: String, text: String) {
@@ -715,9 +794,6 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         }
         pendingAfterDatabase = state.pendingAfterDatabase
         pendingAfterAuth = state.pendingAfterAuth
-        if (pendingAfterAuth != null && !tokenVault.hasCredential() && !oauth.isRunning()) {
-            pendingAfterAuth = null
-        }
         persistPendingState()
     }
 
@@ -736,6 +812,27 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private fun emit(type: String, requestId: String, text: String) {
         runOnLiveWebView { webView ->
             val payload = JSONObject().put("type", type).put("requestId", requestId).put("text", text).toString()
+            webView.evaluateJavascript("window.GecisChat && window.GecisChat.onNativeEvent($payload);", null)
+        }
+    }
+
+    private fun emitActionRequired(
+        requestId: String,
+        kind: String,
+        title: String,
+        message: String,
+        actions: Array<String>,
+    ) {
+        runOnLiveWebView { webView ->
+            val payload = JSONObject()
+                .put("type", "action_required")
+                .put("requestId", requestId)
+                .put("kind", kind)
+                .put("title", title)
+                .put("message", message)
+                .put("actions", JSONArray(actions))
+                .put("autoResume", kind == "auth")
+                .toString()
             webView.evaluateJavascript("window.GecisChat && window.GecisChat.onNativeEvent($payload);", null)
         }
     }
@@ -766,6 +863,18 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     }
 
     private fun emitResumeTurn(then: (() -> Unit)? = null) {
+        val authPending = pendingAfterAuth
+        if (authPending != null && !tokenVault.hasCredential()) {
+            emitActionRequired(
+                requestId = authPending.requestId,
+                kind = "auth",
+                title = "需要连接 Google 账号",
+                message = "连接账号后会自动继续刚才的问题。",
+                actions = arrayOf("login"),
+            )
+            then?.invoke()
+            return
+        }
         val pending = pendingAfterDatabase ?: pendingAfterAuth ?: inflight
         if (pending == null) {
             then?.invoke()
@@ -814,19 +923,6 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
               root.style.setProperty('--android-safe-bottom', '${bottom}px');
               root.style.setProperty('--android-safe-left', '${left}px');
               root.style.setProperty('--android-ime-bottom', '${imeBottom}px');
-              let style = document.getElementById('gecis-native-insets');
-              if (!style) {
-                style = document.createElement('style');
-                style.id = 'gecis-native-insets';
-                style.textContent = `
-                  html, body, .app { min-height: 100%; }
-                  body { padding: 0; }
-                  header { height: calc(54px + var(--android-safe-top, 0px)); padding-top: var(--android-safe-top, 0px); padding-left: calc(14px + var(--android-safe-left, 0px)); padding-right: calc(14px + var(--android-safe-right, 0px)); }
-                  main { padding-left: calc(18px + var(--android-safe-left, 0px)); padding-right: calc(18px + var(--android-safe-right, 0px)); }
-                  .composer-wrap { padding-left: calc(14px + var(--android-safe-left, 0px)); padding-right: calc(14px + var(--android-safe-right, 0px)); padding-bottom: calc(12px + max(var(--android-safe-bottom, 0px), var(--android-ime-bottom, 0px))); }
-                `;
-                document.head.appendChild(style);
-              }
             })();
         """.trimIndent()
         webView.post {

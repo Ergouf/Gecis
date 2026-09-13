@@ -1,8 +1,8 @@
 use crate::runtime::{
-    install_hint, locate_agy, probe_version, start_background_login, AntigravityRuntime,
-    RuntimeEvent,
+    install_hint, locate_agy, probe_authentication, start_background_login,
+    AntigravityRuntime, RuntimeEvent,
 };
-use crate::AppState;
+use crate::{AppState, PendingRequest};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender};
@@ -22,25 +22,12 @@ pub fn bridge_ready(app: AppHandle) -> Result<Value, String> {
     let _ = app.emit("gecis://history", &snapshot);
 
     // Surface runtime availability immediately so the UI is never silent.
-    match probe_version() {
-        Ok(path) => {
-            emit_status(&app, &format!("已找到 agy：{path}"), "success");
+    match locate_agy() {
+        Ok(_) => {
+            emit_native(&app, json!({"type":"setup_status","platform":"windows","runtime":"ready"}));
         }
-        Err(message) => {
-            let hint = install_hint();
-            emit_status(&app, &format!("未就绪：{message}"), "error");
-            emit_native(
-                &app,
-                json!({
-                    "type": "runtime_hint",
-                    "requestId": "",
-                    "text": format!(
-                        "{message}\n\n安装命令：{}\n或点击状态栏后按说明操作。\n安装目录：{}",
-                        hint["install"].as_str().unwrap_or(""),
-                        hint["defaultPath"].as_str().unwrap_or("")
-                    )
-                }),
-            );
+        Err(_) => {
+            emit_native(&app, json!({"type":"setup_status","platform":"windows","runtime":"missing"}));
         }
     }
     Ok(snapshot)
@@ -104,6 +91,33 @@ pub fn open_conversation(app: AppHandle, conversation_id: i64) -> Result<String,
     }
     let history = state.history.lock().map_err(|e| e.to_string())?;
     Ok(history.snapshot(Some(conversation_id))?.to_string())
+}
+
+#[tauri::command]
+pub fn move_conversation(app: AppHandle, conversation_id: i64, project_id: i64) -> Result<String, String> {
+    ensure_idle(&app)?;
+    let state = app.state::<AppState>();
+    let history = state.history.lock().map_err(|e| e.to_string())?;
+    history.move_conversation(conversation_id, project_id)?;
+    let current = *state.current_conversation.lock().map_err(|e| e.to_string())?;
+    if current == Some(conversation_id) {
+        *state.current_project.lock().map_err(|e| e.to_string())? = Some(project_id);
+    }
+    Ok(history.snapshot(current)?.to_string())
+}
+
+#[tauri::command]
+pub fn delete_conversation(app: AppHandle, conversation_id: i64) -> Result<String, String> {
+    ensure_idle(&app)?;
+    let state = app.state::<AppState>();
+    let history = state.history.lock().map_err(|e| e.to_string())?;
+    history.delete_conversation(conversation_id)?;
+    let mut current = state.current_conversation.lock().map_err(|e| e.to_string())?;
+    if *current == Some(conversation_id) {
+        *current = None;
+        if let Ok(mut runtime) = state.runtime.lock() { *runtime = None; }
+    }
+    Ok(history.snapshot(*current)?.to_string())
 }
 
 #[tauri::command]
@@ -374,74 +388,75 @@ pub fn runtime_status() -> Result<Value, String> {
 #[tauri::command]
 pub fn get_setup_status(app: AppHandle) -> Result<Value, String> {
     let has_agy = locate_agy().is_ok();
-    let logged_in = has_agy && windows_agy_logged_in();
-    let has_fenbi = {
-        let state = app.state::<AppState>();
-        let result = state
-            .knowledge
-            .lock()
-            .map(|k| k.has_database())
-            .unwrap_or(false);
-        result
-    };
+    let state = app.state::<AppState>();
+    let auth = state.auth_status.lock().map(|v| v.clone()).unwrap_or_else(|_| "unknown".into());
+    let has_fenbi = state.knowledge.lock().map(|k| k.has_database()).unwrap_or(false);
     Ok(json!({
+        "platform": "windows",
+        "runtime": if has_agy { "ready" } else { "missing" },
+        "auth": auth,
+        "knowledge": { "available": has_fenbi, "name": if has_fenbi { Some("fenbi.db") } else { None } },
         "agyInstalled": has_agy,
-        "loggedIn": logged_in,
         "hasFenbi": has_fenbi,
     }))
 }
 
-/// Heuristic: Antigravity stores OAuth material under the user profile `.gemini` tree.
-fn windows_agy_logged_in() -> bool {
-    let Some(home) = dirs::home_dir() else {
-        return false;
-    };
-    let roots = [
-        home.join(".gemini/antigravity-cli"),
-        home.join(".gemini"),
-    ];
-    let names = [
-        "antigravity-oauth-token",
-        "jetski-standalone-oauth-token",
-        "oauth-token",
-    ];
-    for root in roots {
-        for name in names {
-            let p = root.join(name);
-            if p.is_file() {
-                if let Ok(meta) = p.metadata() {
-                    if meta.len() > 16 {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    // Settings or conversation cache existing is a weaker signal; only count non-empty token files.
-    false
-}
-
 #[tauri::command]
-pub fn start_login(app: AppHandle) -> Result<String, String> {
-    match start_background_login() {
-        Ok(message) => {
-            emit_status(&app, "正在浏览器中完成 Google 登录…", "working");
-            Ok(message)
-        }
-        Err(err) => {
-            emit_status(&app, &format!("无法启动登录：{err}"), "error");
-            Err(err)
-        }
+pub fn start_login(app: AppHandle, request_id: Option<String>) -> Result<String, String> {
+    if let Ok(mut auth) = app.state::<AppState>().auth_status.lock() {
+        *auth = "checking".into();
     }
+    emit_status(&app, "正在打开 Google 登录…", "working");
+    let app_task = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(err) = start_background_login() {
+            emit_status(&app_task, &format!("无法启动登录：{err}"), "error");
+            return;
+        }
+        for _ in 0..60 {
+            if probe_authentication(Duration::from_secs(8)) {
+                if let Ok(mut auth) = app_task.state::<AppState>().auth_status.lock() {
+                    *auth = "connected".into();
+                }
+                emit_native(&app_task, json!({"type":"setup_status","platform":"windows","auth":"connected"}));
+                emit_status(&app_task, "Google 账号已连接", "success");
+                let pending = app_task.state::<AppState>().pending_auth.lock().ok().and_then(|mut value| value.take());
+                if let Some(pending) = pending.filter(|value| request_id.as_deref().map(|id| id == value.request_id).unwrap_or(true)) {
+                    if let Ok(mut runtime) = app_task.state::<AppState>().runtime.lock() { *runtime = None; }
+                    let retry_app = app_task.clone();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        if let Err(err) = handle_send(retry_app.clone(), pending.request_id.clone(), pending.text, false) {
+                            emit_error(&retry_app, &pending.request_id, &err);
+                        }
+                    });
+                }
+                return;
+            }
+            thread::sleep(Duration::from_secs(2));
+        }
+        if let Ok(mut auth) = app_task.state::<AppState>().auth_status.lock() { *auth = "required".into(); }
+        emit_status(&app_task, "尚未完成 Google 登录", "error");
+        if let Some(id) = request_id.as_deref() {
+            emit_action_required(
+                &app_task, id, "auth", "账号连接没有完成",
+                "请完成浏览器中的授权，然后重试。",
+                json!([{"id":"login","label":"重新登录","primary":true}]),
+            );
+        }
+    });
+    Ok("started".into())
 }
 
 #[tauri::command]
 pub fn install_runtime(app: AppHandle) -> Result<String, String> {
     emit_status(&app, "正在安装 Antigravity CLI…", "working");
-    let mut command = std::process::Command::new("powershell");
+    let mut command = crate::runtime::background_command("powershell");
     command
         .args([
             "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
@@ -521,8 +536,23 @@ pub async fn send_message(app: AppHandle, request_id: String, text: String) -> R
 
     let app_task = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        if let Err(err) = handle_send(app_task.clone(), request_id.clone(), text) {
+        if let Err(err) = handle_send(app_task.clone(), request_id.clone(), text, true) {
             emit_status(&app_task, "发送失败", "error");
+            emit_error(&app_task, &request_id, &err);
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn retry_message(app: AppHandle, request_id: String, text: String) -> Result<(), String> {
+    ensure_idle(&app)?;
+    if let Ok(mut runtime) = app.state::<AppState>().runtime.lock() {
+        *runtime = None;
+    }
+    let app_task = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(err) = handle_send(app_task.clone(), request_id.clone(), text, false) {
             emit_error(&app_task, &request_id, &err);
         }
     });
@@ -557,9 +587,30 @@ fn emit_error(app: &AppHandle, request_id: &str, message: &str) {
     );
 }
 
-fn handle_send(app: AppHandle, request_id: String, text: String) -> Result<(), String> {
+fn emit_action_required(
+    app: &AppHandle,
+    request_id: &str,
+    kind: &str,
+    title: &str,
+    message: &str,
+    actions: Value,
+) {
+    emit_native(app, json!({
+        "type": "action_required",
+        "requestId": request_id,
+        "kind": kind,
+        "title": title,
+        "message": message,
+        "actions": actions,
+        "autoResume": kind == "auth",
+    }));
+}
+
+fn handle_send(app: AppHandle, request_id: String, text: String, persist: bool) -> Result<(), String> {
     emit_status(&app, "正在准备对话…", "working");
-    persist_user_message(&app, &text)?;
+    if persist {
+        persist_user_message(&app, &text)?;
+    }
 
     // Model decides when/how to search via MCP `search_fenbi`. No program-side pre-retrieval.
     let augmented = text.clone();
@@ -587,17 +638,17 @@ fn handle_send(app: AppHandle, request_id: String, text: String) -> Result<(), S
                     *runtime_slot = Some(runtime);
                 }
                 Err(message) => {
-                    let hint = install_hint();
                     emit_status(&app, "未找到 Antigravity CLI", "error");
-                    // Offer one-click install path in the assistant bubble.
-                    emit_error(
+                    emit_action_required(
                         &app,
                         &request_id,
-                        &format!(
-                            "{message}\n\n一键安装：可在状态栏消息中查看命令，或设置 GECIS_AGY。\n安装：{}\n默认路径：{}",
-                            hint["install"].as_str().unwrap_or(""),
-                            hint["defaultPath"].as_str().unwrap_or("")
-                        ),
+                        "runtime",
+                        "缺少 Antigravity 运行环境",
+                        &message,
+                        json!([
+                            {"id":"install","label":"安装运行环境","primary":true},
+                            {"id":"copy_install","label":"复制安装命令"}
+                        ]),
                     );
                     return Ok(());
                 }
@@ -615,12 +666,16 @@ fn handle_send(app: AppHandle, request_id: String, text: String) -> Result<(), S
     let (done_tx, done_rx) = channel::<()>();
     let app_pump = app.clone();
     let request_id_pump = request_id.clone();
-    thread::spawn(move || pump_runtime_events(app_pump, request_id_pump, done_tx));
+    let text_pump = text.clone();
+    thread::spawn(move || pump_runtime_events(app_pump, request_id_pump, text_pump, done_tx));
     match done_rx.recv_timeout(Duration::from_secs(10 * 60)) {
         Ok(()) => Ok(()),
         Err(_) => {
             emit_status(&app, "AI runtime 超时", "error");
-            emit_error(&app, &request_id, "等待 AI 回复超时（10 分钟）。请检查网络或重新登录。");
+            emit_action_required(
+                &app, &request_id, "network", "等待回答超时",
+                "请检查网络后重试。", json!([{"id":"retry","label":"重试","primary":true}]),
+            );
             Ok(())
         }
     }
@@ -657,7 +712,7 @@ fn pick_fenbi_file(app: &AppHandle) -> Option<PathBuf> {
     picked.and_then(|path| path.into_path().ok())
 }
 
-fn pump_runtime_events(app: AppHandle, request_id: String, done_tx: Sender<()>) {
+fn pump_runtime_events(app: AppHandle, request_id: String, original_text: String, done_tx: Sender<()>) {
     let mut idle_ticks = 0u32;
     loop {
         let events = poll(&app);
@@ -711,7 +766,10 @@ fn pump_runtime_events(app: AppHandle, request_id: String, done_tx: Sender<()>) 
                     } else {
                         rid
                     };
-                    emit_native(&app, json!({"type":"error","requestId": rid, "text": message}));
+                    emit_action_required(
+                        &app, &rid, "network", "没有完成回答", &message,
+                        json!([{"id":"retry","label":"重试","primary":true}]),
+                    );
                     emit_status(&app, "发生错误", "error");
                     finished = true;
                 }
@@ -721,23 +779,16 @@ fn pump_runtime_events(app: AppHandle, request_id: String, done_tx: Sender<()>) 
                     } else {
                         rid
                     };
-                    let login_msg = start_background_login().unwrap_or_else(|err| {
-                        format!(
-                            "请在 Gecis 菜单中点「登录」完成 Google 授权。\n{err}\n安装：{}",
-                            install_hint()["install"].as_str().unwrap_or("")
-                        )
-                    });
-                    emit_native(
-                        &app,
-                        json!({
-                            "type":"error",
-                            "requestId": rid,
-                            "text": format!(
-                                "需要登录 Antigravity CLI。\n{login_msg}\n\n登录完成后请重新发送消息。"
-                            )
-                        }),
+                    if let Ok(mut pending) = app.state::<AppState>().pending_auth.lock() {
+                        *pending = Some(PendingRequest { request_id: rid.clone(), text: original_text.clone() });
+                    }
+                    if let Ok(mut auth) = app.state::<AppState>().auth_status.lock() { *auth = "required".into(); }
+                    emit_action_required(
+                        &app, &rid, "auth", "需要连接 Google 账号",
+                        "连接账号后会自动继续刚才的问题。",
+                        json!([{"id":"login","label":"去登录","primary":true}]),
                     );
-                    emit_status(&app, "请先登录 Antigravity CLI", "error");
+                    emit_status(&app, "等待连接 Google 账号", "idle");
                     finished = true;
                 }
             }
@@ -759,13 +810,10 @@ fn pump_runtime_events(app: AppHandle, request_id: String, done_tx: Sender<()>) 
                     .unwrap_or(false)
             };
             if pending {
-                emit_native(
-                    &app,
-                    json!({
-                        "type":"error",
-                        "requestId": request_id,
-                        "text": "AI runtime 暂无输出。可能尚未登录、网络异常，或 agy 正在等待浏览器授权。若已打开登录窗口，请完成后再试。"
-                    }),
+                emit_action_required(
+                    &app, &request_id, "network", "AI 暂无响应",
+                    "请检查网络；如果刚完成登录，可以直接重试。",
+                    json!([{"id":"retry","label":"重试","primary":true}]),
                 );
                 emit_status(&app, "AI runtime 无响应，请检查登录/网络", "error");
                 // Clear pending so the next send can retry.

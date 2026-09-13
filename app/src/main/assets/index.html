@@ -7,496 +7,214 @@
   <link rel="stylesheet" href="vendor/katex/katex.min.css" />
   <style>
     :root {
-      --ink: #1c1b19;
-      --ink-soft: #3f3c36;
-      --muted: #8a857c;
-      --paper: #faf8f5;
-      --panel: #ffffff;
-      --line: #e8e4dc;
-      --line-strong: #d9d3c8;
-      --accent: #2f6b4f;
-      --accent-soft: #e7f0ea;
-      --user-bubble: #f0ede6;
-      --danger: #a33b32;
-      --shadow: 0 10px 30px rgba(28, 27, 25, 0.06);
-      --radius-lg: 18px;
-      --radius-md: 12px;
-      --font: "PingFang SC", "Segoe UI", system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+      --ink: #26262a; --ink-soft: #505057; --muted: #7a7a82;
+      --page: #fff; --panel: #fff; --sidebar: #f3f3f5; --hover: #e9e9ec;
+      --selected: #e7e7ea; --line: rgba(28,28,32,.08); --line-strong: rgba(28,28,32,.14);
+      --accent: #4d7df3; --accent-soft: #edf2ff; --user-bubble: #f1f1f3;
+      --danger: #b33a32; --danger-soft: #fbefed; --warning: #8a5a15;
+      --sidebar-width: 288px; --content-width: 800px;
+      --android-safe-top: 0px; --android-safe-right: 0px; --android-safe-bottom: 0px; --android-safe-left: 0px; --android-ime-bottom: 0px;
+      --safe-top: max(env(safe-area-inset-top, 0px),var(--android-safe-top));
+      --safe-right: max(env(safe-area-inset-right, 0px),var(--android-safe-right));
+      --safe-bottom: max(env(safe-area-inset-bottom, 0px),var(--android-safe-bottom));
+      --safe-left: max(env(safe-area-inset-left, 0px),var(--android-safe-left));
+      --shadow: 0 0 0 1px var(--line),0 4px 10px rgba(28,28,32,.04),0 16px 40px rgba(28,28,32,.08);
+      --font: "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
-    body {
-      margin: 0;
-      font-family: var(--font);
-      color: var(--ink);
-      background:
-        radial-gradient(1200px 500px at 50% -10%, #f3efe7 0%, transparent 60%),
-        var(--paper);
-      -webkit-font-smoothing: antialiased;
-    }
-    button, input, textarea { font: inherit; color: inherit; }
+    body { margin: 0; color: var(--ink); background: var(--page); font-family: var(--font); -webkit-font-smoothing: antialiased; }
+    * { scrollbar-width: thin; scrollbar-color: #c4c4ca transparent; }
+    *::-webkit-scrollbar { width: 10px; height: 10px; }
+    *::-webkit-scrollbar-track { background: transparent; }
+    *::-webkit-scrollbar-thumb { min-height: 42px; border: 3px solid transparent; border-radius: 999px; background: #c4c4ca; background-clip: padding-box; }
+    *::-webkit-scrollbar-thumb:hover { background-color: #a9a9b0; }
+    *::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+    button, textarea { color: inherit; font: inherit; }
     button { cursor: pointer; }
+    button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .app-shell { min-height: 100%; }
+    .workspace { min-height: 100vh; display: flex; flex-direction: column; }
 
-    .app { min-height: 100%; display: flex; flex-direction: column; }
-
-    header {
-      position: sticky;
-      top: 0;
-      z-index: 30;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      height: calc(56px + env(safe-area-inset-top, 0px));
-      padding: env(safe-area-inset-top, 0px) 16px 0;
-      background: rgba(250, 248, 245, 0.88);
-      backdrop-filter: blur(14px);
-      border-bottom: 1px solid var(--line);
-    }
-    .icon-btn {
-      width: 36px;
-      height: 36px;
-      border: 0;
-      border-radius: 10px;
-      background: transparent;
-      color: var(--ink-soft);
-      display: grid;
-      place-items: center;
-      font-size: 18px;
-      line-height: 1;
-    }
-    .icon-btn:hover { background: #efece5; }
-    .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .brand {
-      font-size: 17px;
-      font-weight: 650;
-      letter-spacing: -0.03em;
-    }
-    .brand span {
-      display: block;
-      margin-top: 1px;
-      font-size: 11px;
-      font-weight: 450;
-      letter-spacing: 0.02em;
-      color: var(--muted);
-    }
-    .header-right {
-      margin-left: auto;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .status {
-      max-width: min(42vw, 280px);
-      padding: 6px 10px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      background: var(--panel);
-      color: var(--muted);
-      font-size: 12px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .status[data-state="success"] { color: var(--accent); border-color: #cfe0d5; background: var(--accent-soft); }
-    .status[data-state="error"] { color: var(--danger); border-color: #efd2ce; background: #fbefed; }
-    .status[data-state="working"] {
-      color: var(--ink-soft);
-      border-color: var(--line-strong);
-    }
-    .status[data-state="working"]::before {
-      content: "";
-      display: inline-block;
-      width: 6px;
-      height: 6px;
-      margin-right: 7px;
-      border-radius: 50%;
-      background: var(--accent);
-      vertical-align: 1px;
-      animation: pulse 1.1s ease-in-out infinite;
-    }
-    @keyframes pulse { 50% { opacity: 0.25; } }
-    @media (prefers-reduced-motion: reduce) {
-      .status[data-state="working"]::before { animation: none; }
-    }
+    .topbar { position: sticky; top: 0; z-index: 30; height: calc(56px + var(--safe-top)); padding: var(--safe-top) calc(14px + var(--safe-right)) 0 calc(14px + var(--safe-left)); display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.92); backdrop-filter: blur(14px); }
+    .icon-btn { width: 36px; height: 36px; padding: 0; border: 0; border-radius: 8px; display: grid; place-items: center; background: transparent; color: var(--ink-soft); line-height: 1; }
+    .icon-btn:hover { background: var(--hover); color: var(--ink); }
+    .ui-icon { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+    .page-title { min-width: 0; }
+    .page-title strong { display: block; overflow: hidden; font-size: 14px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+    .page-title span { display: block; margin-top: 1px; color: var(--muted); font-size: 11px; }
+    .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+    .status { max-width: min(44vw,320px); padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; background: var(--panel); color: var(--ink-soft); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .status[data-state="idle"] { display: none; }
+    .status[data-state="success"] { border-color: #cdd9fa; background: var(--accent-soft); color: #345fc6; }
+    .status[data-state="error"] { border-color: #ebc9c6; background: var(--danger-soft); color: var(--danger); }
+    .status[data-state="working"]::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: var(--accent); vertical-align: 1px; animation: pulse 1.1s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: .25; } }
 
     .menu-wrap { position: relative; }
-    .menu {
-      position: absolute;
-      right: 0;
-      top: calc(100% + 8px);
-      min-width: 180px;
-      padding: 6px;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      background: var(--panel);
-      box-shadow: var(--shadow);
-      display: none;
-      z-index: 40;
-    }
+    .menu { position: absolute; top: calc(100% + 7px); right: 0; z-index: 40; display: none; min-width: 196px; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); }
     .menu.open { display: block; }
-    .menu button {
-      width: 100%;
-      border: 0;
-      background: transparent;
-      text-align: left;
-      padding: 10px 12px;
-      border-radius: 10px;
-      font-size: 14px;
-      color: var(--ink-soft);
-    }
-    .menu button:hover { background: #f4f1ea; }
-    .menu button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-    .menu .sep { height: 1px; margin: 6px 8px; background: var(--line); }
+    .menu button { width: 100%; padding: 10px 11px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); text-align: left; font-size: 14px; }
+    .menu button:hover { background: var(--hover); }
+    .menu .sep { height: 1px; margin: 5px 8px; background: var(--line); }
 
-    main {
-      flex: 1;
-      width: min(760px, 100%);
-      margin: 0 auto;
-      padding: 28px 18px 140px;
-    }
-    .empty {
-      padding: 18vh 12px 0;
-      text-align: center;
-    }
-    .empty-mark {
-      width: 48px;
-      height: 48px;
-      margin: 0 auto 18px;
-      border-radius: 14px;
-      background: linear-gradient(160deg, #2f6b4f, #1f4635);
-      color: #f7f4ee;
-      display: grid;
-      place-items: center;
-      font-weight: 700;
-      letter-spacing: -0.04em;
-      box-shadow: 0 12px 28px rgba(47, 107, 79, 0.22);
-    }
-    .empty h1 {
-      margin: 0 0 8px;
-      font-size: 28px;
-      font-weight: 650;
-      letter-spacing: -0.035em;
-    }
-    .empty p {
-      margin: 0 auto;
-      max-width: 28em;
-      color: var(--muted);
-      font-size: 14px;
-      line-height: 1.7;
-    }
-    .onboard {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      justify-content: center;
-      margin-top: 28px;
-    }
-    .onboard-btn {
-      min-height: 40px;
-      padding: 0 16px;
-      border-radius: 999px;
-      border: 1px solid var(--line-strong);
-      background: var(--panel);
-      color: var(--ink);
-      font-size: 14px;
-      font-weight: 550;
-    }
-    .onboard-btn.primary {
-      background: var(--ink);
-      border-color: var(--ink);
-      color: var(--paper);
-    }
-    .onboard-btn:hover { filter: brightness(0.98); }
-    .empty-hint {
-      margin-top: 18px !important;
-      font-size: 12px !important;
-      color: var(--muted) !important;
-    }
-    .conversation {
-      display: block;
-      padding: 10px 12px;
-      margin: 0 6px 4px;
-      border-radius: 12px;
-      width: calc(100% - 12px);
-      border: 0;
-      background: transparent;
-      text-align: left;
-      cursor: pointer;
-    }
-    .conversation:hover, .conversation.current { background: #efece5; }
-    .conversation-title {
-      font-size: 14px;
-      color: var(--ink);
-      font-weight: 550;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .conversation-meta {
-      display: flex;
-      align-items: baseline;
-      gap: 8px;
-      margin-top: 3px;
-    }
-    .conversation-preview {
-      flex: 1;
-      min-width: 0;
-      font-size: 12px;
-      color: var(--muted);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .conversation-time {
-      flex: 0 0 auto;
-      font-size: 11px;
-      color: #b0aaa0;
-    }
-
-    .message { margin: 0 0 22px; font-size: 15px; line-height: 1.72; }
+    .messages { flex: 1; width: min(var(--content-width),100%); margin: 0 auto; padding: 40px calc(24px + var(--safe-right)) 190px calc(24px + var(--safe-left)); }
+    .message { margin: 0 0 32px; font-size: 16px; line-height: 1.8; }
     .message.user { display: flex; justify-content: flex-end; }
-    .message.user .bubble {
-      max-width: 84%;
-      padding: 11px 14px;
-      background: var(--user-bubble);
-      border-radius: 16px 16px 5px 16px;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-    }
-    .message.assistant .bubble {
-      max-width: 100%;
-      overflow-wrap: anywhere;
-    }
+    .message.user .bubble { max-width: 84%; padding: 11px 17px; border-radius: 18px; background: var(--user-bubble); overflow-wrap: anywhere; white-space: pre-wrap; }
+    .message.assistant .bubble { max-width: 100%; overflow-wrap: anywhere; }
     .message.assistant .bubble > :first-child { margin-top: 0; }
     .message.assistant .bubble > :last-child { margin-bottom: 0; }
-    .assistant p { margin: 0.45em 0 0.95em; }
-    .assistant h1, .assistant h2, .assistant h3 {
-      line-height: 1.28;
-      letter-spacing: -0.02em;
-      margin: 1.2em 0 0.5em;
-    }
-    .assistant ul, .assistant ol { padding-left: 1.35em; margin: 0.5em 0 0.95em; }
-    .assistant blockquote {
-      margin: 0.8em 0;
-      padding: 0.15em 0 0.15em 12px;
-      border-left: 2px solid var(--line-strong);
-      color: var(--ink-soft);
-    }
-    .assistant code {
-      font-family: "Cascadia Mono", Consolas, monospace;
-      font-size: 0.9em;
-      background: #f0ebe3;
-      border-radius: 5px;
-      padding: 0.12em 0.34em;
-    }
-    .assistant pre {
-      margin: 0.85em 0;
-      padding: 12px 14px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: #f4f1ea;
-      overflow: auto;
-    }
-    .assistant pre code { background: transparent; padding: 0; }
-    .assistant table {
-      width: 100%;
-      border-collapse: collapse;
-      margin: 0.9em 0;
-      display: block;
-      overflow-x: auto;
-    }
-    .assistant th, .assistant td {
-      border-bottom: 1px solid var(--line);
-      padding: 8px 10px;
-      text-align: left;
-    }
-    .assistant a { color: #245a86; text-underline-offset: 2px; }
-    .assistant img { max-width: 100%; border-radius: 10px; }
-    .assistant .katex-display { overflow-x: auto; overflow-y: hidden; padding: 6px 0; }
-    .assistant.pending .bubble::after {
-      content: "";
-      display: inline-block;
-      width: 7px;
-      height: 1em;
-      margin-left: 4px;
-      background: #b7b1a6;
-      vertical-align: -2px;
-      animation: blink 1s steps(1) infinite;
-    }
+    .assistant p { margin: .45em 0 .95em; }
+    .assistant h1, .assistant h2, .assistant h3 { margin: 1.25em 0 .5em; line-height: 1.3; letter-spacing: -.02em; }
+    .assistant ul, .assistant ol { margin: .5em 0 .95em; padding-left: 1.4em; }
+    .assistant blockquote { margin: .8em 0; padding: .1em 0 .1em 12px; border-left: 3px solid var(--line-strong); color: var(--ink-soft); }
+    .assistant code { padding: .12em .34em; border-radius: 4px; background: #f1f1f3; font-family: "Cascadia Mono",Consolas,monospace; font-size: .9em; }
+    .assistant pre { margin: .9em 0; padding: 13px 15px; border: 1px solid var(--line); border-radius: 9px; overflow: auto; background: #f6f6f7; }
+    .assistant pre code { padding: 0; background: transparent; }
+    .assistant table { display: block; width: 100%; margin: .9em 0; border-collapse: collapse; overflow-x: auto; }
+    .assistant th, .assistant td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+    .assistant a { color: #225d86; text-underline-offset: 2px; }
+    .assistant img { max-width: 100%; border-radius: 8px; }
+    .assistant .katex-display { padding: 7px 0; overflow-x: auto; overflow-y: hidden; }
+    .assistant.pending .bubble::after { content: ""; display: inline-block; width: 7px; height: 1em; margin-left: 4px; background: #9b9ba1; vertical-align: -2px; animation: blink 1s steps(1) infinite; }
     @keyframes blink { 50% { opacity: 0; } }
-    @media (prefers-reduced-motion: reduce) {
-      .assistant.pending .bubble::after { animation: none; }
-    }
 
-    .composer-wrap {
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      z-index: 20;
-      padding: 18px 14px calc(16px + env(safe-area-inset-bottom, 0px));
-      background: linear-gradient(180deg, rgba(250,248,245,0) 0%, var(--paper) 28%, var(--paper) 100%);
-    }
-    .composer {
-      width: min(760px, 100%);
-      margin: 0 auto;
-      display: flex;
-      align-items: flex-end;
-      gap: 10px;
-      padding: 10px 10px 10px 16px;
-      background: var(--panel);
-      border: 1px solid var(--line-strong);
-      border-radius: 20px;
-      box-shadow: var(--shadow);
-    }
-    .composer:focus-within {
-      border-color: #c5d8cc;
-      box-shadow: 0 0 0 3px rgba(47, 107, 79, 0.12), var(--shadow);
-    }
-    .composer textarea {
-      flex: 1;
-      border: 0;
-      outline: 0;
-      resize: none;
-      min-height: 28px;
-      max-height: 160px;
-      padding: 6px 0;
-      background: transparent;
-      line-height: 1.45;
-    }
-    .send {
-      width: 38px;
-      height: 38px;
-      flex: 0 0 38px;
-      border: 0;
-      border-radius: 12px;
-      background: var(--ink);
-      color: #faf8f5;
-      display: grid;
-      place-items: center;
-      font-size: 18px;
-    }
-    .send:disabled { opacity: 0.35; cursor: not-allowed; }
-    .send:not(:disabled):hover { background: #2a2824; }
-    .send:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .action-card { padding: 15px 16px; border: 1px solid #e7c8c4; border-left: 4px solid var(--danger); border-radius: 9px; background: var(--panel); }
+    .action-card[data-tone="warning"] { border-color: #ead9b9; border-left-color: var(--warning); }
+    .action-title { margin: 0 0 5px; font-size: 14px; font-weight: 650; }
+    .action-message { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+    .action-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .action-button { min-height: 36px; padding: 0 13px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); color: var(--ink-soft); font-size: 13px; font-weight: 600; }
+    .action-button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
 
-    .drawer-scrim {
-      position: fixed;
-      inset: 0;
-      background: rgba(28, 27, 25, 0.18);
-      z-index: 50;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.18s ease;
-    }
+    .composer-wrap { position: fixed; right: 0; bottom: 0; left: 0; z-index: 20; padding: 20px calc(14px + var(--safe-right)) calc(14px + max(var(--safe-bottom),var(--android-ime-bottom))) calc(14px + var(--safe-left)); background: linear-gradient(180deg,rgba(255,255,255,0),var(--page) 34%,var(--page)); }
+    .composer { width: min(var(--content-width),100%); margin: 0 auto; padding: 18px 14px 12px 20px; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; border: 1px solid var(--line); border-radius: 24px; background: var(--panel); box-shadow: 0 2px 6px rgba(28,28,32,.025),0 8px 30px rgba(28,28,32,.045); }
+    .composer:focus-within { border-color: #bcbcc5; }
+    .composer textarea { flex: 1 0 100%; width: 100%; min-height: 42px; max-height: 160px; padding: 0; border: 0; outline: 0; resize: none; background: transparent; font-size: 16px; line-height: 1.6; }
+    .composer textarea::placeholder { color: #9999a1; }
+    .send { width: 36px; height: 36px; margin-left: auto; flex: 0 0 36px; border: 0; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: #fff; }
+    .send:disabled { border: 1px solid var(--line-strong); background: #f0f0f2; color: #ababaf; cursor: not-allowed; }
+
+    .drawer-scrim { position: fixed; inset: 0; z-index: 50; opacity: 0; pointer-events: none; background: rgba(20,20,24,.24); transition: opacity .18s ease; }
     .drawer-scrim.open { opacity: 1; pointer-events: auto; }
-    .drawer {
-      position: fixed;
-      top: 0;
-      bottom: 0;
-      left: 0;
-      width: min(86vw, 320px);
-      background: var(--paper);
-      border-right: 1px solid var(--line);
-      z-index: 51;
-      transform: translateX(-102%);
-      transition: transform 0.2s ease;
-      display: flex;
-      flex-direction: column;
-      padding-top: env(safe-area-inset-top, 0px);
-      box-shadow: 16px 0 40px rgba(28, 27, 25, 0.08);
-    }
-    .drawer.open { transform: translateX(0); }
-    @media (prefers-reduced-motion: reduce) {
-      .drawer, .drawer-scrim { transition: none; }
-    }
-    .drawer-head {
-      height: 58px;
-      display: flex;
-      align-items: center;
-      padding: 0 12px 0 18px;
-      border-bottom: 1px solid var(--line);
-    }
-    .drawer-title { font-weight: 650; letter-spacing: -0.02em; }
-    .drawer-actions { margin-left: auto; display: flex; gap: 4px; }
-    .project-list { overflow: auto; padding: 14px 10px 24px; }
+    .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 51; width: min(88vw,var(--sidebar-width)); display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--sidebar); transform: translateX(-102%); transition: transform .2s ease; }
+    .sidebar.open { transform: translateX(0); }
+    .sidebar-head { min-height: calc(72px + var(--safe-top)); padding: var(--safe-top) calc(14px + var(--safe-right)) 0 calc(14px + var(--safe-left)); display: flex; align-items: center; }
+    #newConversation { width: auto; padding: 0 10px; display: flex; gap: 10px; font-size: 14px; }
+    #newConversation::after { content: "新对话"; }
+    .sidebar-actions { width: 100%; display: flex; align-items: center; gap: 2px; }
+    .sidebar-actions #newProject { margin-left: auto; }
+    .project-list { flex: 1; min-height: 0; padding: 8px 12px 22px; overflow: auto; overscroll-behavior: contain; }
     .project { margin-bottom: 14px; }
-    .project-head {
-      display: flex;
-      align-items: center;
-      height: 32px;
-      padding: 0 8px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 600;
-    }
-    .project-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .project-new-chat {
-      margin-left: auto;
-      width: 28px;
-      height: 28px;
-      border: 0;
-      border-radius: 8px;
-      background: transparent;
-      color: var(--muted);
-      font-size: 18px;
-    }
-    .project-new-chat:hover { background: #efece5; }
-    .project-empty { padding: 6px 10px; color: #b0aaa0; font-size: 13px; }
+    .project-head { height: 40px; padding: 0 9px; display: flex; align-items: center; color: var(--ink-soft); font-size: 13px; font-weight: 500; }
+    .project-name { min-width: 0; display: flex; align-items: center; gap: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .project-name .ui-icon { width: 16px; height: 16px; flex: 0 0 auto; }
+    .project-name span { overflow: hidden; text-overflow: ellipsis; }
+    .project-new-chat { width: 30px; height: 30px; margin-left: auto; padding: 0; border: 0; border-radius: 7px; display: grid; place-items: center; background: transparent; color: var(--muted); }
+    .project-new-chat:hover { background: var(--hover); color: var(--ink); }
+    .project-empty { padding: 6px 10px; color: #98989f; font-size: 12px; }
+    .conversation-row { position: relative; margin: 0 0 2px; border-radius: 8px; display: flex; align-items: center; }
+    .conversation-row:hover, .conversation-row:focus-within { background: var(--hover); }
+    .conversation-row.current { background: var(--selected); }
+    .conversation { flex: 1; min-width: 0; padding: 9px 34px 9px 32px; border: 0; border-radius: 8px; display: block; background: transparent; text-align: left; }
+    .conversation-title { overflow: hidden; color: var(--ink); font-size: 14px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+    .conversation-meta { margin-top: 3px; display: flex; align-items: baseline; gap: 7px; }
+    .conversation-preview { flex: 1; min-width: 0; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .conversation-time { flex: 0 0 auto; color: #96969d; font-size: 10px; }
+    .conversation-more { position: absolute; top: 7px; right: 5px; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px; display: grid; place-items: center; opacity: 0; background: transparent; color: var(--muted); }
+    .conversation-row:hover .conversation-more, .conversation-row:focus-within .conversation-more, .conversation-more[aria-expanded="true"] { opacity: 1; }
+    .conversation-more:hover { background: #dcdce0; color: var(--ink); }
+    .conversation-menu { position: fixed; z-index: 80; display: none; width: 218px; max-height: min(360px,70vh); padding: 6px; border: 1px solid var(--line); border-radius: 10px; overflow: auto; background: var(--panel); box-shadow: var(--shadow); }
+    .conversation-menu.open { display: block; }
+    .conversation-menu-label { padding: 7px 9px 5px; color: var(--muted); font-size: 11px; }
+    .conversation-menu button { width: 100%; min-height: 34px; padding: 7px 9px; border: 0; border-radius: 7px; display: flex; align-items: center; gap: 9px; background: transparent; color: var(--ink-soft); text-align: left; font-size: 13px; }
+    .conversation-menu button:hover { background: var(--hover); color: var(--ink); }
+    .conversation-menu button:disabled { color: #a5a5ab; cursor: default; }
+    .conversation-menu button.danger { color: var(--danger); }
+    .conversation-menu .sep { height: 1px; margin: 5px 7px; background: var(--line); }
+    .sidebar-footer { padding: 8px; border-top: 1px solid var(--line); background: var(--sidebar); }
+    .source-row { min-height: 48px; padding: 7px 8px; display: flex; align-items: center; gap: 9px; border-radius: 8px; }
+    .source-row + .source-row { margin-top: 2px; }
+    .source-icon { width: 28px; height: 28px; display: grid; place-items: center; color: var(--ink-soft); }
+    .source-copy { flex: 1; min-width: 0; }
+    .source-copy strong, .source-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .source-copy strong { font-size: 13px; font-weight: 500; }
+    .source-copy span { margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .source-action { min-height: 32px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); font-size: 12px; }
+    .source-action:hover { background: var(--hover); color: var(--ink); }
+    .topbar { border-bottom: 0; }
+    .sidebar { border-right: 0; }
+    .sidebar-footer { border-top: 0; padding: 12px calc(12px + var(--safe-right)) calc(12px + var(--safe-bottom)) calc(12px + var(--safe-left)); }
+    .sidebar-footer::before { content: ""; display: block; height: 1px; margin: 0 8px 8px; background: var(--line); }
+    .menu, .conversation-menu { border: 0; border-radius: 12px; }
+    .composer { border: 0; box-shadow: 0 0 0 1px var(--line-strong),0 3px 12px rgba(28,28,32,.03),0 12px 32px rgba(28,28,32,.035); }
+    .composer:focus-within { box-shadow: 0 0 0 1px rgba(28,28,32,.24),0 4px 16px rgba(28,28,32,.045); }
+    .send:disabled { border: 0; }
+    .status { border: 0; background: transparent; }
+    .action-card { border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+    .action-card[data-tone="error"] .action-title { color: var(--danger); }
+    .action-card[data-tone="warning"] { border-color: var(--line); }
+    .action-card[data-tone="warning"] .action-title { color: var(--warning); }
+    .action-button { border-color: var(--line); font-weight: 500; }
+    .assistant pre { border: 0; border-radius: 12px; }
 
-    @media (max-width: 420px) {
-      header { padding-left: 10px; padding-right: 10px; gap: 8px; }
-      .brand span { display: none; }
-      .status { max-width: 34vw; padding: 5px 8px; font-size: 11px; }
-      .menu { min-width: 160px; right: -4px; }
+    @media (min-width: 860px) {
+      body:not([data-platform="android"]) .sidebar { z-index: 25; width: var(--sidebar-width); transform: none; }
+      body:not([data-platform="android"]) .workspace { margin-left: var(--sidebar-width); }
+      body:not([data-platform="android"]) .composer-wrap { left: var(--sidebar-width); }
+      body:not([data-platform="android"]) #historyTrigger, body:not([data-platform="android"]) #closeDrawer, body:not([data-platform="android"]) .drawer-scrim { display: none; }
+    }
+    @media (max-width: 520px) { .messages { padding: 24px calc(16px + var(--safe-right)) 136px calc(16px + var(--safe-left)); } .icon-btn { width: 44px; height: 44px; } .conversation-more { width: 36px; height: 36px; top: 3px; } .conversation { min-height: 44px; padding-right: 42px; } .project-new-chat { width: 38px; height: 38px; } .source-action { min-height: 36px; } .status { max-width: 40vw; } }
+    @media (prefers-reduced-motion: reduce) { *,*::before,*::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
+    @media (hover: none), (pointer: coarse) {
+      .conversation-more { opacity: 1; width: 44px; height: 44px; top: 3px; right: 0; }
+      .conversation { padding-right: 46px; }
+      .icon-btn, .project-new-chat, .source-action, .conversation-menu button, .send { min-width: 44px; min-height: 44px; }
+    }
+    body[data-platform="android"] .conversation-more { opacity: 1; width: 44px; height: 44px; top: 3px; right: 0; }
+    body[data-platform="android"] .conversation { padding-right: 46px; }
+    body[data-platform="android"] :is(.icon-btn, .project-new-chat, .source-action, .conversation-menu button, .send) { min-width: 44px; min-height: 44px; }
+    @media (max-width: 859px) {
+      .composer-wrap { padding: 12px calc(12px + var(--safe-right)) calc(10px + max(var(--safe-bottom),var(--android-ime-bottom))) calc(12px + var(--safe-left)); }
+      .composer { padding: 13px 12px 10px 16px; border-radius: 20px; gap: 6px; }
+      .composer textarea { min-height: 32px; }
+      .messages { padding-bottom: 170px; }
+      .sidebar { box-shadow: var(--shadow); }
     }
   </style>
 </head>
 <body>
-<div class="app">
-  <header>
-    <button class="icon-btn" id="historyTrigger" type="button" aria-label="打开会话列表">☰</button>
-    <div class="brand">Gecis<span>本地学习助手</span></div>
-    <div class="header-right">
-      <div class="status" id="status" data-state="idle">就绪</div>
-      <div class="menu-wrap">
-        <button class="icon-btn" id="btnMenu" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="更多操作">⋯</button>
-        <div class="menu" id="menu" role="menu">
-          <button type="button" data-action="importFenbi" role="menuitem">导入题库</button>
-          <button type="button" data-action="resumeConversation" role="menuitem">续聊会话</button>
-          <button type="button" data-action="copyId" role="menuitem">复制会话 ID</button>
-          <div class="sep"></div>
-          <button type="button" data-action="exportMd" role="menuitem">导出 Markdown</button>
-          <button type="button" data-action="exportHtml" role="menuitem">导出 HTML</button>
-          <div class="sep"></div>
-          <button type="button" data-action="login" role="menuitem">登录账号</button>
-        </div>
+<div class="app-shell">
+  <aside class="sidebar" id="drawer" aria-hidden="true" aria-label="会话与数据源">
+    <div class="sidebar-head">
+      <div class="sidebar-actions">
+        <button class="icon-btn" id="newConversation" type="button" title="新对话" aria-label="新对话"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M12 20H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L11 15l-4 1 1-4Z"/></svg></button>
+        <button class="icon-btn" id="newProject" type="button" title="新建分类" aria-label="新建分类"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M3 18V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M12 11v6M9 14h6"/></svg></button>
+        <button class="icon-btn" id="closeDrawer" type="button" title="关闭侧栏" aria-label="关闭侧栏"><svg class="ui-icon" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
       </div>
     </div>
-  </header>
-
-  <main id="messages"></main>
-
-  <div class="composer-wrap">
-    <form id="form" class="composer">
-      <textarea id="input" rows="1" placeholder="问一道题、一个概念，或让它解释公式…"></textarea>
-      <button id="send" class="send" type="submit" aria-label="发送">↑</button>
-    </form>
-  </div>
-</div>
-
-<div class="drawer-scrim" id="drawerScrim"></div>
-<aside class="drawer" id="drawer" aria-hidden="true">
-  <div class="drawer-head">
-    <div class="drawer-title">会话</div>
-    <div class="drawer-actions">
-      <button class="icon-btn" id="newProject" type="button" title="新建项目">＋</button>
-      <button class="icon-btn" id="closeDrawer" type="button" title="关闭">×</button>
+    <div class="project-list" id="projectList"></div>
+    <div class="sidebar-footer">
+      <div class="source-row"><div class="source-icon"><svg class="ui-icon" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg></div><div class="source-copy"><strong>本地题库</strong><span id="fenbiState">未导入，可选</span></div><button class="source-action" id="fenbiAction" type="button">导入</button></div>
+      <div class="source-row"><div class="source-icon"><svg class="ui-icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"/><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"/></svg></div><div class="source-copy"><strong>Google 账号</strong><span id="authState">需要时连接</span></div><button class="source-action" id="authAction" type="button">连接</button></div>
     </div>
-  </div>
-  <div class="project-list" id="projectList"></div>
-</aside>
-
+  </aside>
+  <div class="drawer-scrim" id="drawerScrim"></div>
+  <section class="workspace">
+    <header class="topbar">
+      <button class="icon-btn" id="historyTrigger" type="button" aria-label="打开会话列表"><svg class="ui-icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
+      <div class="page-title"><strong id="conversationHeading">新对话</strong></div>
+      <div class="topbar-right">
+        <div class="status" id="status" data-state="idle" role="status" aria-live="polite"></div>
+        <div class="menu-wrap"><button class="icon-btn" id="btnMenu" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="更多操作"><svg class="ui-icon" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg></button><div class="menu" id="menu" role="menu"><button type="button" data-action="resumeConversation" role="menuitem">续聊共享会话</button><button type="button" data-action="copyId" role="menuitem">复制会话 ID</button><div class="sep"></div><button type="button" data-action="exportMd" role="menuitem">导出 Markdown</button><button type="button" data-action="exportHtml" role="menuitem">导出 HTML</button></div></div>
+      </div>
+    </header>
+    <main class="messages" id="messages"></main>
+    <div class="composer-wrap"><form id="form" class="composer"><textarea id="input" rows="1" placeholder="随心输入" aria-label="消息"></textarea><button id="send" class="send" type="submit" aria-label="发送" disabled><svg class="ui-icon" viewBox="0 0 24 24"><path d="m12 19 0-14M6.5 10.5 12 5l5.5 5.5"/></svg></button></form></div>
+  </section>
+</div>
+<div class="conversation-menu" id="conversationMenu" role="menu" aria-hidden="true"></div>
 <script src="vendor/dompurify/purify.min.js"></script>
 <script src="vendor/marked/marked.umd.js"></script>
 <script src="vendor/katex/katex.min.js"></script>

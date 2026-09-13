@@ -187,6 +187,36 @@ impl HistoryStore {
         Ok(stmt.exists(params![project_id]).unwrap_or(false))
     }
 
+    pub fn move_conversation(&self, conversation_id: i64, project_id: i64) -> Result<(), String> {
+        if !self.conversation_exists(conversation_id)? {
+            return Err(format!("历史会话不存在：{conversation_id}"));
+        }
+        if !self.project_exists(project_id)? {
+            return Err(format!("目标分类不存在：{project_id}"));
+        }
+        let now = now_ms();
+        self.conn
+            .execute(
+                "UPDATE conversations SET project_id=?, updated_at=? WHERE id=?",
+                params![project_id, now, conversation_id],
+            )
+            .map_err(|e| e.to_string())?;
+        self.conn
+            .execute("UPDATE projects SET updated_at=? WHERE id=?", params![now, project_id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn delete_conversation(&self, conversation_id: i64) -> Result<(), String> {
+        if !self.conversation_exists(conversation_id)? {
+            return Err(format!("历史会话不存在：{conversation_id}"));
+        }
+        self.conn
+            .execute("DELETE FROM conversations WHERE id=?", params![conversation_id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     pub fn append_message(&self, conversation_id: i64, role: &str, content: &str) -> Result<(), String> {
         if role != "user" && role != "assistant" {
             return Err("不支持的消息角色".into());
@@ -378,5 +408,61 @@ fn title_from(text: &str) -> String {
         let mut out: String = chars.into_iter().take(24).collect();
         out.push('…');
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HistoryStore;
+
+    #[test]
+    fn formula_markdown_round_trips_without_escaping_changes() {
+        let path = std::env::temp_dir().join(format!(
+            "gecis-history-formula-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let source = r"行内 $a^2+b^2=c^2$，块级 $$\frac{A}{B}$$，以及 \(x+1\) 和 \[\sum_i^n i\]。";
+        {
+            let store = HistoryStore::open(&path).unwrap();
+            let project = store.ensure_default_project().unwrap();
+            let conversation = store.create_conversation(Some(project)).unwrap();
+            store.append_message(conversation, "assistant", source).unwrap();
+            let messages = store.list_messages(conversation).unwrap();
+            assert_eq!(messages, vec![("assistant".into(), source.into())]);
+            let snapshot = store.snapshot(Some(conversation)).unwrap();
+            assert_eq!(snapshot["messages"][0]["content"], source);
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn conversation_can_be_moved_and_deleted_with_its_messages() {
+        let path = std::env::temp_dir().join(format!(
+            "gecis-history-actions-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        {
+            let store = HistoryStore::open(&path).unwrap();
+            let source = store.ensure_default_project().unwrap();
+            let target = store.create_project("代数").unwrap();
+            let conversation = store.create_conversation(Some(source)).unwrap();
+            store.append_message(conversation, "user", "二次方程怎么解").unwrap();
+            store.move_conversation(conversation, target).unwrap();
+            let moved = store.snapshot(Some(conversation)).unwrap();
+            assert_eq!(moved["currentProjectId"], target);
+            store.delete_conversation(conversation).unwrap();
+            let deleted = store.snapshot(Some(conversation)).unwrap();
+            assert!(deleted["currentConversationId"].is_null());
+            assert!(deleted["messages"].as_array().unwrap().is_empty());
+        }
+        let _ = std::fs::remove_file(path);
     }
 }

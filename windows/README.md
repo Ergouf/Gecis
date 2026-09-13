@@ -35,14 +35,16 @@ npm run build
 
    默认安装到 `%LOCALAPPDATA%\agy\bin\agy.exe`。应用会自动扫描该路径；也可设置 `GECIS_AGY`。
 
-3. 若未登录：点顶栏「登录」打开新终端完成 Google 登录
-4. 题库：顶栏「导入题库」选择 fenbi.db（发送消息不会弹框阻塞）
+3. 若未登录：直接提问，应用会在会话内提示连接 Google 账号；授权后自动继续原问题
+4. 题库：在左侧栏底部选择 fenbi.db；题库可选，不会阻塞普通提问
 
 未安装 `agy` 时应用仍可打开；发送消息会给出安装/登录提示。
 
 ## 功能
 
 - 连续对话 UI（Markdown + KaTeX）
+- Windows 宽屏常驻会话侧栏；窄窗与 Android 使用抽屉
+- 登录、运行环境和网络问题通过会话内行动卡引导处理
 - **模型自主检索**：MCP 工具 `search_fenbi`，由 Gemini/Antigravity 决定何时搜、搜什么（不在应用侧预检索）
 - 本地 SQLite 会话历史（项目 / 会话 / 消息）
 - 系统 `agy` headless NDJSON 流式回答

@@ -26,9 +26,8 @@ describe('Gecis desktop chat', () => {
     await browser.waitUntil(
       async () => {
         const enabled = await input.isEnabled();
-        const sendBtn = await $('#send');
-        const sendEnabled = await sendBtn.isEnabled();
-        return enabled && sendEnabled;
+        const pending = await $('.message.assistant.pending');
+        return enabled && !(await pending.isExisting());
       },
       { timeout: 20000, timeoutMsg: 'composer stayed locked after first reply' },
     );
@@ -36,6 +35,7 @@ describe('Gecis desktop chat', () => {
     // Turn 2
     await input.click();
     await input.setValue('再回复两个字：好的');
+    await $('#send').waitForEnabled({ timeout: 5000 });
     await browser.keys('Enter');
 
     await browser.waitUntil(

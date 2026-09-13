@@ -1,9 +1,10 @@
 {
   "name": "gecis-windows",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.3.1",
   "type": "module",
   "scripts": {
+    "stage": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stage-frontend.ps1",
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
@@ -15,7 +16,7 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.5.0",
-    "@wdio/cli": "^9.19.2",
+    "@wdio/cli": "^9.31.8",
     "@wdio/local-runner": "^9.19.2",
     "@wdio/mocha-framework": "^9.19.2",
     "@wdio/spec-reporter": "^9.19.2",

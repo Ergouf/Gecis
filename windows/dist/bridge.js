@@ -46,6 +46,9 @@
     resumeConversation(agyId) {
       return invoke('resume_conversation', { agyId });
     },
+    getSetupStatus() {
+      return invoke('get_setup_status');
+    },
     getConversationId() {
       return invoke('get_conversation_id');
     },

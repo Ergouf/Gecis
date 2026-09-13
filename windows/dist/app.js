@@ -15,16 +15,39 @@ let historyInitialized = false;
 let currentConversationId = null;
 let currentProjectId = null;
 
+let setupStatus = { loggedIn: false, hasFenbi: false, agyInstalled: true };
+
+async function refreshSetupStatus() {
+  try {
+    if (window.GecisNative?.getSetupStatus) {
+      setupStatus = (await window.GecisNative.getSetupStatus()) || setupStatus;
+    }
+  } catch (_) {
+    // Keep defaults; empty state still shows both CTAs.
+  }
+  return setupStatus;
+}
+
 function renderEmpty() {
+  const needLogin = !setupStatus.loggedIn;
+  const needFenbi = !setupStatus.hasFenbi;
+  const actions = [];
+  if (needLogin) {
+    actions.push(`<button type="button" class="onboard-btn primary" data-action="login">登录 Google 账号</button>`);
+  }
+  if (needFenbi) {
+    actions.push(`<button type="button" class="onboard-btn${needLogin ? '' : ' primary'}" data-action="importFenbi">导入题库（可选）</button>`);
+  }
+  const done = !needLogin && !needFenbi
+    ? `<p class="empty-done">账号与题库已就绪，直接提问即可。</p>`
+    : '';
   messages.innerHTML = `
     <section class="empty">
       <div class="empty-mark">G</div>
       <h1>想学什么？</h1>
       <p>直接提问。支持 Markdown 与数学公式。需要时，模型会自行检索本地题库。</p>
-      <div class="onboard" id="onboard">
-        <button type="button" class="onboard-btn primary" data-action="login">登录 Google 账号</button>
-        <button type="button" class="onboard-btn" data-action="importFenbi">导入题库（可选）</button>
-      </div>
+      ${actions.length ? `<div class="onboard" id="onboard">${actions.join('')}</div>` : ''}
+      ${done}
       <p class="empty-hint">也可在输入框粘贴会话 ID，继续之前的对话</p>
     </section>`;
   document.getElementById('onboard')?.addEventListener('click', async (e) => {
@@ -39,6 +62,10 @@ function renderEmpty() {
         setStatus('请选择 fenbi.db…', 'working');
         const result = await window.GecisNative.importFenbi();
         if (result === 'cancelled') setStatus('已取消导入', 'idle');
+        else {
+          await refreshSetupStatus();
+          if (!active && messages.querySelector('.empty')) renderEmpty();
+        }
       }
     } catch (err) {
       setStatus(err.message || '操作失败', 'error');
@@ -71,7 +98,8 @@ function previewText(raw) {
   if (!text) return '';
   return text.length > 64 ? `${text.slice(0, 64)}…` : text;
 }
-renderEmpty();
+
+refreshSetupStatus().then(() => renderEmpty());
 
 function setStatus(text, state = 'idle') {
   clearTimeout(statusResetTimer);

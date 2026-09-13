@@ -563,6 +563,18 @@ fn open_url_hidden(url: &str) -> Result<(), String> {
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        // explorer.exe reliably opens the default browser without a console flash.
+        let ok = Command::new("explorer.exe")
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .is_ok();
+        if ok {
+            return Ok(());
+        }
         Command::new("rundll32")
             .args(["url.dll,FileProtocolHandler", url])
             .stdin(Stdio::null())
@@ -580,19 +592,15 @@ fn open_url_hidden(url: &str) -> Result<(), String> {
     }
 }
 
-/// Background Google Sign-In: no console window. Opens the system browser if agy prints an OAuth URL.
+/// Background Google Sign-In without a console window.
+/// Launches `agy` (no --print) so the CLI can open the system browser; if it only prints
+/// an OAuth URL, we open that URL ourselves via explorer.exe.
 pub fn start_background_login() -> Result<String, String> {
     let locator = locate_agy()?;
     let mut command = Command::new(&locator.path);
+    // Interactive start is what triggers Antigravity's local browser Sign-In.
+    // Avoid --print here: headless print mode often never opens a browser.
     command
-        .args([
-            "--print",
-            "ping",
-            "--output-format",
-            "text",
-            "--print-timeout",
-            "3m",
-        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -632,15 +640,18 @@ pub fn start_background_login() -> Result<String, String> {
         }
     });
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
-    let mut opened = false;
+    // Give the CLI a few seconds to either open the browser itself or print a URL.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    let mut opened_url = false;
     while std::time::Instant::now() < deadline {
-        match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+        match rx.recv_timeout(std::time::Duration::from_millis(250)) {
             Ok(line) => {
+                eprintln!("agy-login: {line}");
                 if let Some(url) = extract_oauth_url(&line) {
-                    open_url_hidden(&url)?;
-                    opened = true;
-                    break;
+                    if open_url_hidden(&url).is_ok() {
+                        opened_url = true;
+                        break;
+                    }
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
@@ -648,13 +659,14 @@ pub fn start_background_login() -> Result<String, String> {
         }
     }
 
-    // Detach so the process can finish the OAuth exchange after browser auth.
+    // Detach the process so it can finish the OAuth code exchange after browser auth.
     std::mem::forget(child);
 
-    if opened {
+    if opened_url {
         Ok("已在系统浏览器打开 Google 登录，请完成授权后返回 Gecis。".into())
     } else {
-        Ok("登录已在后台启动。若未跳转浏览器，请稍候重试，或检查网络。".into())
+        // CLI is expected to have opened the default browser itself (official local flow).
+        Ok("已启动 Google 登录。若浏览器未打开，请检查网络后重试。".into())
     }
 }
 

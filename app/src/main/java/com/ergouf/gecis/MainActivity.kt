@@ -364,8 +364,18 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
         @JavascriptInterface
         fun startLogin(): String {
-            emitStatus("请使用系统浏览器完成 Google 登录", "working")
-            return "请使用系统浏览器完成 Google 登录"
+            runOnUiThread {
+                if (tokenVault.hasCredential()) {
+                    emitStatus("已登录 Google 账号", "success")
+                    return@runOnUiThread
+                }
+                emitStatus("正在打开 Google 登录…", "working")
+                if (!oauth.isRunning()) {
+                    // Reuse the same PKCE loopback flow as first-message login.
+                    oauth.start(this@MainActivity)
+                }
+            }
+            return "started"
         }
     }
 

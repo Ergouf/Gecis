@@ -373,10 +373,50 @@ menu?.addEventListener('click', async (e) => {
   }
 });
 
+/** Detect a pasted Antigravity conversation id (UUID) that means "resume this thread". */
+function extractResumeConversationId(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const uuid = text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  if (!uuid) return null;
+  const id = uuid[0];
+  const hasHint = /续聊|继续|对话|会话|resume|continue|session/i.test(text);
+  const rest = text
+    .replace(id, ' ')
+    .replace(/续聊|继续|对话|会话|线程|resume|continue|session|id|ID|这个|一下|，|,|。|\.|：|:|\s+/gi, '')
+    .trim();
+  // Bare ID, or an explicit resume command around the ID.
+  if (rest.length === 0) return id;
+  if (hasHint && rest.length < 24) return id;
+  return null;
+}
+
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = input.value.trim();
   if (!text || active) return;
+
+  // Chat-box resume: paste conversation id (optionally with "续聊") → resume, don't send to AI.
+  const resumeId = extractResumeConversationId(text);
+  if (resumeId) {
+    input.value = '';
+    input.style.height = 'auto';
+    setStatus('正在接入会话…', 'working');
+    try {
+      const snapshot = await window.GecisNative.resumeConversation(resumeId);
+      applySnapshot(snapshot, true);
+      addMessage('user', text);
+      // Lightweight confirmation bubble without invoking the model.
+      const row = addMessage('assistant', `已接入共享会话，可以继续提问。\n\n会话 ID：\`${resumeId}\``);
+      row.classList.remove('pending');
+      setStatus('已接入共享会话', 'success');
+    } catch (err) {
+      setStatus(err.message || '续聊失败', 'error');
+    }
+    send.disabled = false;
+    return;
+  }
+
   const requestId = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
   addMessage('user', text);
   input.value = '';

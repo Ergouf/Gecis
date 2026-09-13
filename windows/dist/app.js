@@ -21,7 +21,55 @@ function renderEmpty() {
       <div class="empty-mark">G</div>
       <h1>想学什么？</h1>
       <p>直接提问。支持 Markdown 与数学公式。需要时，模型会自行检索本地题库。</p>
+      <div class="onboard" id="onboard">
+        <button type="button" class="onboard-btn primary" data-action="login">登录 Google 账号</button>
+        <button type="button" class="onboard-btn" data-action="importFenbi">导入题库（可选）</button>
+      </div>
+      <p class="empty-hint">也可在输入框粘贴会话 ID，继续之前的对话</p>
     </section>`;
+  document.getElementById('onboard')?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    try {
+      if (action === 'login') {
+        await window.GecisNative.startLogin();
+        setStatus('正在打开 Google 登录…', 'working');
+      } else if (action === 'importFenbi') {
+        setStatus('请选择 fenbi.db…', 'working');
+        const result = await window.GecisNative.importFenbi();
+        if (result === 'cancelled') setStatus('已取消导入', 'idle');
+      }
+    } catch (err) {
+      setStatus(err.message || '操作失败', 'error');
+    }
+  });
+}
+
+function formatRelativeTime(ts) {
+  if (!ts) return '';
+  const t = Number(ts);
+  if (!Number.isFinite(t) || t <= 0) return '';
+  // Support both seconds and milliseconds epochs.
+  const ms = t > 1e12 ? t : t * 1000;
+  const diff = Date.now() - ms;
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return '刚刚';
+  if (m < 60) return `${m} 分钟前`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时前`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d} 天前`;
+  return new Date(ms).toLocaleDateString();
+}
+
+function previewText(raw) {
+  const text = String(raw || '')
+    .replace(/[#*_`>~\[\]()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return '';
+  return text.length > 64 ? `${text.slice(0, 64)}…` : text;
 }
 renderEmpty();
 
@@ -171,7 +219,21 @@ function renderProjectList(snapshot) {
         const item = document.createElement('button');
         item.type = 'button';
         item.className = 'conversation' + (conversation.id === currentConversationId ? ' current' : '');
-        item.textContent = conversation.title;
+        const title = document.createElement('div');
+        title.className = 'conversation-title';
+        title.textContent = conversation.title || '未命名会话';
+        item.appendChild(title);
+        const meta = document.createElement('div');
+        meta.className = 'conversation-meta';
+        const preview = document.createElement('span');
+        preview.className = 'conversation-preview';
+        preview.textContent = previewText(conversation.preview) || '（空会话）';
+        const time = document.createElement('span');
+        time.className = 'conversation-time';
+        time.textContent = formatRelativeTime(conversation.updatedAt);
+        meta.appendChild(preview);
+        if (time.textContent) meta.appendChild(time);
+        item.appendChild(meta);
         item.addEventListener('click', () => openConversation(conversation.id));
         section.appendChild(item);
       }

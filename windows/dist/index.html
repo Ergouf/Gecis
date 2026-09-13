@@ -184,6 +184,74 @@
       font-size: 14px;
       line-height: 1.7;
     }
+    .onboard {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      margin-top: 28px;
+    }
+    .onboard-btn {
+      min-height: 40px;
+      padding: 0 16px;
+      border-radius: 999px;
+      border: 1px solid var(--line-strong);
+      background: var(--panel);
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 550;
+    }
+    .onboard-btn.primary {
+      background: var(--ink);
+      border-color: var(--ink);
+      color: var(--paper);
+    }
+    .onboard-btn:hover { filter: brightness(0.98); }
+    .empty-hint {
+      margin-top: 18px !important;
+      font-size: 12px !important;
+      color: var(--muted) !important;
+    }
+    .conversation {
+      display: block;
+      padding: 10px 12px;
+      margin: 0 6px 4px;
+      border-radius: 12px;
+      width: calc(100% - 12px);
+      border: 0;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+    .conversation:hover, .conversation.current { background: #efece5; }
+    .conversation-title {
+      font-size: 14px;
+      color: var(--ink);
+      font-weight: 550;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .conversation-meta {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-top: 3px;
+    }
+    .conversation-preview {
+      flex: 1;
+      min-width: 0;
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .conversation-time {
+      flex: 0 0 auto;
+      font-size: 11px;
+      color: #b0aaa0;
+    }
 
     .message { margin: 0 0 22px; font-size: 15px; line-height: 1.72; }
     .message.user { display: flex; justify-content: flex-end; }
@@ -374,21 +442,6 @@
       font-size: 18px;
     }
     .project-new-chat:hover { background: #efece5; }
-    .conversation {
-      width: 100%;
-      display: block;
-      border: 0;
-      background: transparent;
-      text-align: left;
-      border-radius: 10px;
-      padding: 10px 10px;
-      color: var(--ink-soft);
-      font-size: 14px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .conversation:hover, .conversation.current { background: #efece5; color: var(--ink); }
     .project-empty { padding: 6px 10px; color: #b0aaa0; font-size: 13px; }
 
     @media (max-width: 420px) {

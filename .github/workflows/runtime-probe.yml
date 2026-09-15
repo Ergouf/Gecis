@@ -59,7 +59,8 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Upload build manifests
-        if: always()
+        if: always() && github.event_name != 'push'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: build-manifests
@@ -76,42 +77,10 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload debug APK
-        if: success()
+        if: success() && github.event_name != 'push'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: gecis-debug-arm64
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-
-      - name: Publish tagged APK to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          apk="app/build/outputs/apk/debug/app-debug.apk"
-          asset="Gecis-${TAG_NAME}-arm64.apk"
-          cp "$apk" "$asset"
-
-          prerelease_args=()
-          if [[ "$TAG_NAME" == *-* ]]; then
-            prerelease_args+=(--prerelease)
-          fi
-
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" "$asset" --clobber
-          else
-            gh release create "$TAG_NAME" "$asset" --generate-notes "${prerelease_args[@]}"
-          fi
-
-          # Always publish: leftover draft releases (e.g. after tag deletion)
-          # make `gh release view` succeed and previously only got an upload,
-          # leaving the APK invisible on the public Releases page.
-          edit_args=(--draft=false)
-          if [[ "$TAG_NAME" == *-* ]]; then
-            edit_args+=(--prerelease)
-          else
-            edit_args+=(--latest)
-          fi
-          gh release edit "$TAG_NAME" "${edit_args[@]}"

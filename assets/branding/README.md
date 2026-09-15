@@ -1,7 +1,7 @@
 # Gecis fox icon
 
 `fox-master.png` is the shared transparent artwork. `app-icon.png` is the
-rounded-square charcoal tile used by Windows and Android legacy launchers.
+transparent square export used by Windows and Android legacy launchers.
 
 Regenerate all sizes from the repository root:
 
@@ -11,8 +11,8 @@ python windows/scripts/make_icons.py
 
 Requires Pillow. The script generates Windows PNG/ICO sizes, Android density
 variants, adaptive foregrounds inside the mask safe zone, and alpha-based
-monochrome variants. Android's adaptive background is `#202126`, matching the
-Windows tile. Do not redraw platform icons independently.
+monochrome variants. Android's adaptive background is transparent so only the
+fox avatar is visible. Do not redraw platform icons independently.
 
 Artwork generated with the built-in image generation tool, using the previous
 orange fox as the identity reference. Prompt:

@@ -3,7 +3,7 @@
 Usage: python windows/scripts/make_icons.py (requires Pillow).
 """
 from pathlib import Path
-from PIL import Image, ImageDraw
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
 BRANDING = ROOT / "assets/branding"
@@ -20,16 +20,9 @@ def foreground(art, coverage):
     return layer
 
 
-def tile(art, circular=False, coverage=.76):
-    result = Image.new("RGBA", (SIZE, SIZE), "#202126")
+def transparent(art, coverage=.76):
+    result = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     result.alpha_composite(foreground(art, coverage))
-    mask = Image.new("L", result.size)
-    draw = ImageDraw.Draw(mask)
-    if circular:
-        draw.ellipse((0, 0, SIZE - 1, SIZE - 1), fill=255)
-    else:
-        draw.rounded_rectangle((0, 0, SIZE - 1, SIZE - 1), radius=SIZE * .22, fill=255)
-    result.putalpha(mask)
     return result
 
 
@@ -44,9 +37,9 @@ def main():
     if alpha.getextrema()[0] == 255:
         raise ValueError("Fox master must have a transparent background")
     art = source.crop(alpha.getbbox())
-    square = tile(art)
-    round_icon = tile(art, circular=True)
-    windows_square = tile(art, coverage=.86)
+    square = transparent(art)
+    round_icon = transparent(art)
+    windows_square = transparent(art, coverage=.86)
     adaptive = foreground(art, .59)
     monochrome = Image.new("RGBA", adaptive.size, "white")
     monochrome.putalpha(adaptive.getchannel("A"))

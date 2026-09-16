@@ -30,6 +30,7 @@ import com.ergouf.gecis.history.PendingChatMessage
 import com.ergouf.gecis.history.PendingChatState
 import com.ergouf.gecis.history.PendingChatStore
 import com.ergouf.gecis.knowledge.FenbiKnowledgeBase
+import com.ergouf.gecis.runtime.AntigravityModelCatalog
 import com.ergouf.gecis.runtime.AntigravityOAuthCoordinator
 import com.ergouf.gecis.runtime.OAuthSessionService
 import com.ergouf.gecis.runtime.AntigravityRuntime
@@ -48,6 +49,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private lateinit var historyStore: ChatHistoryStore
     private lateinit var pendingStore: PendingChatStore
     private lateinit var runtimePrefs: SharedPreferences
+    private lateinit var modelCatalog: AntigravityModelCatalog
     private val importWorker = Executors.newSingleThreadExecutor()
     private val historyWorker = Executors.newSingleThreadExecutor()
 
@@ -144,6 +146,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         knowledgeBase = FenbiKnowledgeBase(applicationContext)
         historyStore = ChatHistoryStore(applicationContext)
         runtimePrefs = getSharedPreferences(RUNTIME_PREFS, MODE_PRIVATE)
+        modelCatalog = AntigravityModelCatalog(applicationContext, tokenVault)
         currentProjectId = runCatching { historyStore.ensureDefaultProject() }.getOrNull()
         restorePendingState()
         runtime = createConfiguredRuntime(currentConversationId?.let { historyStore.getAgyConversationId(it) })
@@ -269,7 +272,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                     .put("loggedIn", tokenVault.hasCredential())
                     .put("hasFenbi", knowledgeBase.hasDatabase())
                     .put("model", configuredModel() ?: JSONObject.NULL)
-                    .put("effort", configuredEffort())
+                    .put("effort", configuredModelEffort() ?: JSONObject.NULL)
                     .toString()
             } catch (error: Throwable) {
                 JSONObject()
@@ -281,7 +284,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                     .put("loggedIn", false)
                     .put("hasFenbi", false)
                     .put("model", JSONObject.NULL)
-                    .put("effort", DEFAULT_EFFORT)
+                    .put("effort", JSONObject.NULL)
                     .put("error", error.message)
                     .toString()
             }
@@ -291,10 +294,24 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         fun getRuntimeSettings(): String = runtimeSettingsJson().toString()
 
         @JavascriptInterface
+        fun getAvailableModels(): String = runCatching {
+            modelCatalog.loadJson()
+                .put("selected", configuredModel() ?: JSONObject.NULL)
+                .toString()
+        }.getOrElse { error ->
+            JSONObject()
+                .put("models", JSONArray())
+                .put("selected", configuredModel() ?: JSONObject.NULL)
+                .put("error", error.message ?: "无法读取上游模型列表")
+                .toString()
+        }
+
+        @JavascriptInterface
         fun setRuntimeSettings(model: String, effort: String): String {
             val normalizedModel = model.trim().takeIf { it.isNotEmpty() }
-            val normalizedEffort = effort.trim().lowercase().takeIf { it in ALLOWED_EFFORTS }
-                ?: throw IllegalArgumentException("思考等级仅支持 low / medium / high")
+            if (normalizedModel != null && !MODEL_SLUG.matches(normalizedModel)) {
+                throw IllegalArgumentException("模型标识无效")
+            }
             val latch = java.util.concurrent.CountDownLatch(1)
             var payload: String? = null
             runOnUiThread {
@@ -304,7 +321,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                     }
                     runtimePrefs.edit().apply {
                         if (normalizedModel == null) remove(PREF_MODEL) else putString(PREF_MODEL, normalizedModel)
-                        putString(PREF_EFFORT, normalizedEffort)
+                        remove(PREF_EFFORT)
                     }.apply()
                     restartRuntimeForCurrentConversation()
                     payload = runtimeSettingsJson().toString()
@@ -496,20 +513,21 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private fun configuredModel(): String? =
         runtimePrefs.getString(PREF_MODEL, null)?.trim()?.takeIf { it.isNotEmpty() }
 
-    private fun configuredEffort(): String =
-        runtimePrefs.getString(PREF_EFFORT, DEFAULT_EFFORT)
-            ?.trim()?.lowercase()?.takeIf { it in ALLOWED_EFFORTS } ?: DEFAULT_EFFORT
+    private fun configuredModelEffort(): String? =
+        configuredModel()?.substringAfterLast('-', "")?.takeIf { it in EFFORT_LEVELS }
 
     private fun runtimeSettingsJson(): JSONObject = JSONObject()
         .put("model", configuredModel() ?: JSONObject.NULL)
-        .put("effort", configuredEffort())
+        .put("effort", configuredModelEffort() ?: JSONObject.NULL)
         .put("contextPolicy", "antigravity-compaction")
 
     private fun createConfiguredRuntime(resumeId: String?): AntigravityRuntime =
         AntigravityRuntime(applicationContext, tokenVault, knowledgeBase).also {
             it.resumeConversationId = resumeId
             it.modelSlug = configuredModel()
-            it.reasoningEffort = configuredEffort()
+            // The selected provider slug already encodes any supported reasoning variant.
+            // Never combine it with a stale independent --effort flag.
+            it.reasoningEffort = null
             it.onConversationId = { id ->
                 val localId = currentConversationId
                 if (localId != null) runCatching { historyStore.setAgyConversationId(localId, id) }
@@ -984,7 +1002,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         private const val RUNTIME_PREFS = "gecis_runtime_settings"
         private const val PREF_MODEL = "model"
         private const val PREF_EFFORT = "effort"
-        private const val DEFAULT_EFFORT = "medium"
-        private val ALLOWED_EFFORTS = setOf("low", "medium", "high")
+        private val EFFORT_LEVELS = setOf("low", "medium", "high")
+        private val MODEL_SLUG = Regex("^[A-Za-z0-9][A-Za-z0-9._-]*$")
     }
 }

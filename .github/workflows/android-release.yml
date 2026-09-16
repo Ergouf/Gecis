@@ -1,4 +1,4 @@
-name: Android Release APK
+name: Cross-platform Release
 
 on:
   push:
@@ -96,4 +96,56 @@ jobs:
         with:
           files: Gecis-v*-arm64.apk
           generate_release_notes: true
+          name: Gecis ${{ github.ref_name }}
+
+  windows:
+    needs: apk
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: windows/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: windows/src-tauri
+
+      - name: Stage shared web assets
+        shell: bash
+        run: bash web/stage-assets.sh
+
+      - name: Install Windows dependencies
+        working-directory: windows
+        run: npm ci
+
+      - name: Build NSIS installer
+        working-directory: windows
+        run: npx tauri build --bundles nsis
+
+      - name: Prepare Windows artifact
+        run: |
+          $version = "${env:GITHUB_REF_NAME}" -replace '^v', ''
+          $installer = Get-ChildItem -Path "windows/src-tauri/target/release/bundle/nsis" -Filter "*.exe" | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer not found" }
+          $target = "Gecis-v$version-windows-x64-setup.exe"
+          Copy-Item $installer.FullName $target
+          Get-Item $target | Format-List Name,Length,FullName
+
+      - name: Upload Windows installer to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Gecis-v*-windows-x64-setup.exe
           name: Gecis ${{ github.ref_name }}

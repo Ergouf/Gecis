@@ -30,9 +30,9 @@
     *::-webkit-scrollbar-thumb { min-height: 42px; border: 3px solid transparent; border-radius: 999px; background: #c4c4ca; background-clip: padding-box; }
     *::-webkit-scrollbar-thumb:hover { background-color: #a9a9b0; }
     *::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
-    button, textarea { color: inherit; font: inherit; }
+    button, textarea, input, select { color: inherit; font: inherit; }
     button { cursor: pointer; }
-    button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .app-shell { min-height: 100%; }
     .workspace { min-height: 100vh; display: flex; flex-direction: column; }
 
@@ -93,6 +93,11 @@
     .composer:focus-within { border-color: #bcbcc5; }
     .composer textarea { flex: 1 0 100%; width: 100%; min-height: 42px; max-height: 160px; padding: 0; border: 0; outline: 0; resize: none; background: transparent; font-size: 16px; line-height: 1.6; }
     .composer textarea::placeholder { color: #9999a1; }
+    .runtime-controls { min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: 6px; }
+    .runtime-control { min-width: 0; height: 34px; padding: 0 10px; border: 0; border-radius: 9px; background: #f4f4f6; color: var(--ink-soft); font-size: 12px; outline: none; }
+    #modelInput { width: min(230px,38vw); }
+    #effortSelect { width: 94px; }
+    .runtime-control:hover { background: var(--hover); color: var(--ink); }
     .send { width: 36px; height: 36px; margin-left: auto; flex: 0 0 36px; border: 0; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: #fff; }
     .send:disabled { border: 1px solid var(--line-strong); background: #f0f0f2; color: #ababaf; cursor: not-allowed; }
 
@@ -165,7 +170,7 @@
       body:not([data-platform="android"]) .composer-wrap { left: var(--sidebar-width); }
       body:not([data-platform="android"]) #historyTrigger, body:not([data-platform="android"]) #closeDrawer, body:not([data-platform="android"]) .drawer-scrim { display: none; }
     }
-    @media (max-width: 520px) { .messages { padding: 24px calc(16px + var(--safe-right)) 136px calc(16px + var(--safe-left)); } .icon-btn { width: 44px; height: 44px; } .conversation-more { width: 36px; height: 36px; top: 3px; } .conversation { min-height: 44px; padding-right: 42px; } .project-new-chat { width: 38px; height: 38px; } .source-action { min-height: 36px; } .status { max-width: 40vw; } }
+    @media (max-width: 520px) { .messages { padding: 24px calc(16px + var(--safe-right)) 156px calc(16px + var(--safe-left)); } .icon-btn { width: 44px; height: 44px; } .conversation-more { width: 36px; height: 36px; top: 3px; } .conversation { min-height: 44px; padding-right: 42px; } .project-new-chat { width: 38px; height: 38px; } .source-action { min-height: 36px; } .status { max-width: 40vw; } #modelInput { width: min(180px,52vw); } .runtime-control { height: 36px; } }
     @media (prefers-reduced-motion: reduce) { *,*::before,*::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
     @media (hover: none), (pointer: coarse) {
       .conversation-more { opacity: 1; width: 44px; height: 44px; top: 3px; right: 0; }
@@ -179,7 +184,7 @@
       .composer-wrap { padding: 12px calc(12px + var(--safe-right)) calc(10px + max(var(--safe-bottom),var(--android-ime-bottom))) calc(12px + var(--safe-left)); }
       .composer { padding: 13px 12px 10px 16px; border-radius: 20px; gap: 6px; }
       .composer textarea { min-height: 32px; }
-      .messages { padding-bottom: 170px; }
+      .messages { padding-bottom: 190px; }
       .sidebar { box-shadow: var(--shadow); }
     }
   </style>
@@ -211,7 +216,7 @@
       </div>
     </header>
     <main class="messages" id="messages"></main>
-    <div class="composer-wrap"><form id="form" class="composer"><textarea id="input" rows="1" placeholder="随心输入" aria-label="消息"></textarea><button id="send" class="send" type="submit" aria-label="发送" disabled><svg class="ui-icon" viewBox="0 0 24 24"><path d="m12 19 0-14M6.5 10.5 12 5l5.5 5.5"/></svg></button></form></div>
+    <div class="composer-wrap"><form id="form" class="composer"><textarea id="input" rows="1" placeholder="随心输入" aria-label="消息"></textarea><div class="runtime-controls"><input id="modelInput" class="runtime-control" type="text" inputmode="text" autocomplete="off" placeholder="模型：默认" aria-label="模型 slug" title="留空使用 Antigravity 默认模型；也可输入精确 model slug" /><select id="effortSelect" class="runtime-control" aria-label="思考等级" title="思考等级"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select></div><button id="send" class="send" type="submit" aria-label="发送" disabled><svg class="ui-icon" viewBox="0 0 24 24"><path d="m12 19 0-14M6.5 10.5 12 5l5.5 5.5"/></svg></button></form></div>
   </section>
 </div>
 <div class="conversation-menu" id="conversationMenu" role="menu" aria-hidden="true"></div>
@@ -221,5 +226,50 @@
 <script src="vendor/katex/auto-render.min.js"></script>
 <script src="bridge.js"></script>
 <script src="app.js"></script>
+<script>
+(() => {
+  const modelInput = document.getElementById('modelInput');
+  const effortSelect = document.getElementById('effortSelect');
+  if (!modelInput || !effortSelect) return;
+  let applying = false;
+  const report = (text, state = 'idle') => window.GecisChat?.onStatus?.({ text, state });
+  const load = async () => {
+    try {
+      const settings = await window.GecisNative?.getRuntimeSettings?.();
+      modelInput.value = settings?.model || '';
+      effortSelect.value = settings?.effort || 'medium';
+    } catch (error) {
+      console.warn('runtime settings unavailable', error);
+    }
+  };
+  const save = async () => {
+    if (applying || !window.GecisNative?.setRuntimeSettings) return;
+    applying = true;
+    modelInput.disabled = effortSelect.disabled = true;
+    try {
+      report('正在切换模型设置…', 'working');
+      const settings = await window.GecisNative.setRuntimeSettings(modelInput.value.trim(), effortSelect.value);
+      modelInput.value = settings?.model || '';
+      effortSelect.value = settings?.effort || 'medium';
+      report(`已应用 ${settings?.model || '默认模型'} · ${(settings?.effort || 'medium').toUpperCase()}`, 'success');
+    } catch (error) {
+      report(error?.message || '模型设置失败', 'error');
+      await load();
+    } finally {
+      modelInput.disabled = effortSelect.disabled = false;
+      applying = false;
+    }
+  };
+  effortSelect.addEventListener('change', save);
+  modelInput.addEventListener('change', save);
+  modelInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      modelInput.blur();
+    }
+  });
+  window.GecisBridgeReady?.then?.(load);
+})();
+</script>
 </body>
 </html>

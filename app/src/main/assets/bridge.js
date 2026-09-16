@@ -33,6 +33,22 @@
         return typeof raw === 'string' ? JSON.parse(raw) : raw;
       });
     },
+    getRuntimeSettings() {
+      return call(() => {
+        const raw = native.getRuntimeSettings();
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (parsed?.error) throw new Error(parsed.error);
+        return parsed;
+      });
+    },
+    setRuntimeSettings(model, effort) {
+      return call(() => {
+        const raw = native.setRuntimeSettings(String(model || ''), String(effort || 'medium'));
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (parsed?.error) throw new Error(parsed.error);
+        return parsed;
+      });
+    },
     createProject(name) {
       return call(() => native.createProject(String(name)));
     },

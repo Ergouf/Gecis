@@ -3,6 +3,7 @@ package com.ergouf.gecis
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.SharedPreferences
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
@@ -46,6 +47,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private lateinit var knowledgeBase: FenbiKnowledgeBase
     private lateinit var historyStore: ChatHistoryStore
     private lateinit var pendingStore: PendingChatStore
+    private lateinit var runtimePrefs: SharedPreferences
     private val importWorker = Executors.newSingleThreadExecutor()
     private val historyWorker = Executors.newSingleThreadExecutor()
 
@@ -72,10 +74,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     private fun handleFenbiDatabasePicked(uri: Uri?) {
         val importOnly = fenbiImportOnly
         val pending = pendingAfterDatabase
-        if (!importOnly && pending == null) {
-            // Unexpected callback; ignore.
-            return
-        }
+        if (!importOnly && pending == null) return
 
         if (uri == null) {
             fenbiImportOnly = false
@@ -144,16 +143,10 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         pendingStore = app.pendingChatStore
         knowledgeBase = FenbiKnowledgeBase(applicationContext)
         historyStore = ChatHistoryStore(applicationContext)
+        runtimePrefs = getSharedPreferences(RUNTIME_PREFS, MODE_PRIVATE)
         currentProjectId = runCatching { historyStore.ensureDefaultProject() }.getOrNull()
         restorePendingState()
-        runtime = AntigravityRuntime(applicationContext, tokenVault, knowledgeBase)
-        (runtime as AntigravityRuntime).onConversationId = { agyId ->
-            val localId = currentConversationId
-            if (localId != null) {
-                runCatching { historyStore.setAgyConversationId(localId, agyId) }
-                emitStatus("会话ID已绑定", "success")
-            }
-        }
+        runtime = createConfiguredRuntime(currentConversationId?.let { historyStore.getAgyConversationId(it) })
         oauth = app.oauth
         oauth.setListener(this)
 
@@ -177,9 +170,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     val url = request.url
                     if (isBundledAsset(url)) return false
-                    if (request.isForMainFrame && (url.scheme == "https" || url.scheme == "http")) {
-                        openExternalUrl(url)
-                    }
+                    if (request.isForMainFrame && (url.scheme == "https" || url.scheme == "http")) openExternalUrl(url)
                     return true
                 }
 
@@ -224,9 +215,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
     override fun onResume() {
         super.onResume()
-        if (tokenVault.hasCredential() && !oauth.isRunning()) {
-            OAuthSessionService.cancelReturn(this)
-        }
+        if (tokenVault.hasCredential() && !oauth.isRunning()) OAuthSessionService.cancelReturn(this)
         if (pageReady) resumePendingIfReady()
     }
 
@@ -260,9 +249,8 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         }
 
         @JavascriptInterface
-        fun getHistory(): String = runCatching {
-            historyStore.snapshot(currentConversationId)
-        }.getOrElse { historyErrorSnapshot(it) }
+        fun getHistory(): String = runCatching { historyStore.snapshot(currentConversationId) }
+            .getOrElse { historyErrorSnapshot(it) }
 
         @JavascriptInterface
         fun getSetupStatus(): String {
@@ -280,6 +268,8 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                     .put("agyInstalled", true)
                     .put("loggedIn", tokenVault.hasCredential())
                     .put("hasFenbi", knowledgeBase.hasDatabase())
+                    .put("model", configuredModel() ?: JSONObject.NULL)
+                    .put("effort", configuredEffort())
                     .toString()
             } catch (error: Throwable) {
                 JSONObject()
@@ -290,9 +280,44 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                     .put("agyInstalled", true)
                     .put("loggedIn", false)
                     .put("hasFenbi", false)
+                    .put("model", JSONObject.NULL)
+                    .put("effort", DEFAULT_EFFORT)
                     .put("error", error.message)
                     .toString()
             }
+        }
+
+        @JavascriptInterface
+        fun getRuntimeSettings(): String = runtimeSettingsJson().toString()
+
+        @JavascriptInterface
+        fun setRuntimeSettings(model: String, effort: String): String {
+            val normalizedModel = model.trim().takeIf { it.isNotEmpty() }
+            val normalizedEffort = effort.trim().lowercase().takeIf { it in ALLOWED_EFFORTS }
+                ?: throw IllegalArgumentException("思考等级仅支持 low / medium / high")
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var payload: String? = null
+            runOnUiThread {
+                try {
+                    require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) {
+                        "请等待当前回答完成后再切换模型"
+                    }
+                    runtimePrefs.edit().apply {
+                        if (normalizedModel == null) remove(PREF_MODEL) else putString(PREF_MODEL, normalizedModel)
+                        putString(PREF_EFFORT, normalizedEffort)
+                    }.apply()
+                    restartRuntimeForCurrentConversation()
+                    payload = runtimeSettingsJson().toString()
+                    emitStatus("模型设置已应用", "success")
+                } catch (error: Throwable) {
+                    payload = JSONObject().put("error", error.message ?: "模型设置失败").toString()
+                    emitStatus(error.message ?: "模型设置失败", "error")
+                } finally {
+                    latch.countDown()
+                }
+            }
+            latch.await(8, java.util.concurrent.TimeUnit.SECONDS)
+            return payload ?: JSONObject().put("error", "模型设置超时").toString()
         }
 
         @JavascriptInterface
@@ -384,7 +409,6 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
 
         @JavascriptInterface
         fun importFenbi(): String {
-            // Must launch picker on UI thread; this interface runs on a binder thread.
             runOnUiThread {
                 try {
                     if (inflight != null || pendingAfterAuth != null || pendingAfterDatabase != null) {
@@ -423,10 +447,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                     return@runOnUiThread
                 }
                 emitStatus("正在打开 Google 登录…", "working")
-                if (!oauth.isRunning()) {
-                    // Reuse the same PKCE loopback flow as first-message login.
-                    oauth.start(this@MainActivity)
-                }
+                if (!oauth.isRunning()) oauth.start(this@MainActivity)
             }
             return "started"
         }
@@ -444,23 +465,15 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             }
         }
 
-        /**
-         * Codex-style resume: paste an Antigravity conversation id in another device/session
-         * and continue that thread via `agy --conversation <id>`.
-         */
         @JavascriptInterface
         fun resumeConversation(agyId: String): String {
             val id = agyId.trim()
-            if (id.isEmpty()) {
-                return historyErrorSnapshot(IllegalArgumentException("会话 ID 不能为空"))
-            }
+            if (id.isEmpty()) return historyErrorSnapshot(IllegalArgumentException("会话 ID 不能为空"))
             val latch = java.util.concurrent.CountDownLatch(1)
             var payload: String? = null
             runOnUiThread {
                 try {
-                    require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) {
-                        "当前消息尚未完成"
-                    }
+                    require(inflight == null && pendingAfterAuth == null && pendingAfterDatabase == null) { "当前消息尚未完成" }
                     val project = currentProjectId ?: historyStore.ensureDefaultProject()
                     val conversationId = historyStore.createConversation(project)
                     historyStore.setAgyConversationId(conversationId, id)
@@ -480,19 +493,33 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         }
     }
 
-    private fun restartRuntimeForCurrentConversation() {
-        val agyId = currentConversationId?.let { historyStore.getAgyConversationId(it) }
-        val rt = runtime as? AntigravityRuntime ?: return
-        rt.close()
-        runtime = AntigravityRuntime(applicationContext, tokenVault, knowledgeBase).also {
-            it.resumeConversationId = agyId
+    private fun configuredModel(): String? =
+        runtimePrefs.getString(PREF_MODEL, null)?.trim()?.takeIf { it.isNotEmpty() }
+
+    private fun configuredEffort(): String =
+        runtimePrefs.getString(PREF_EFFORT, DEFAULT_EFFORT)
+            ?.trim()?.lowercase()?.takeIf { it in ALLOWED_EFFORTS } ?: DEFAULT_EFFORT
+
+    private fun runtimeSettingsJson(): JSONObject = JSONObject()
+        .put("model", configuredModel() ?: JSONObject.NULL)
+        .put("effort", configuredEffort())
+        .put("contextPolicy", "antigravity-compaction")
+
+    private fun createConfiguredRuntime(resumeId: String?): AntigravityRuntime =
+        AntigravityRuntime(applicationContext, tokenVault, knowledgeBase).also {
+            it.resumeConversationId = resumeId
+            it.modelSlug = configuredModel()
+            it.reasoningEffort = configuredEffort()
             it.onConversationId = { id ->
                 val localId = currentConversationId
-                if (localId != null) {
-                    runCatching { historyStore.setAgyConversationId(localId, id) }
-                }
+                if (localId != null) runCatching { historyStore.setAgyConversationId(localId, id) }
             }
         }
+
+    private fun restartRuntimeForCurrentConversation() {
+        val agyId = currentConversationId?.let { historyStore.getAgyConversationId(it) }
+        runtime.close()
+        runtime = createConfiguredRuntime(agyId)
     }
 
     private fun buildMarkdownExport(
@@ -572,7 +599,6 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
     }
 
     private fun handleSubmittedMessage(message: PendingChatMessage) {
-        // Model drives fenbi search via MCP. Do not block the send path on a file picker.
         persistUserMessageThenContinue(message)
     }
 
@@ -618,9 +644,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
                 if (conversationId != null) currentConversationId = conversationId
-                saveResult.exceptionOrNull()?.let { error ->
-                    emitStatus("历史记录保存失败：${shortError(error)}", "error")
-                }
+                saveResult.exceptionOrNull()?.let { error -> emitStatus("历史记录保存失败：${shortError(error)}", "error") }
                 persistPendingState()
                 emitHistory()
                 continueMessage(message.copy(conversationId = conversationId))
@@ -661,9 +685,7 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             if (isDestroyed) return@runOnUiThread
             try {
                 startActivity(
-                    Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                        putExtra(Browser.EXTRA_APPLICATION_ID, packageName)
-                    },
+                    Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply { putExtra(Browser.EXTRA_APPLICATION_ID, packageName) },
                 )
             } catch (_: ActivityNotFoundException) {
                 failPendingAuth("设备上没有可打开 Google 登录页面的浏览器")
@@ -743,11 +765,8 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         val conversationId = completed?.conversationId ?: return
         historyWorker.execute {
             val result = runCatching { historyStore.appendMessage(conversationId, "assistant", text) }
-            if (result.isSuccess) {
-                emitHistory()
-            } else {
-                emitStatus("回答完成，但历史记录保存失败：${shortError(result.exceptionOrNull())}", "error")
-            }
+            if (result.isSuccess) emitHistory()
+            else emitStatus("回答完成，但历史记录保存失败：${shortError(result.exceptionOrNull())}", "error")
         }
     }
 
@@ -881,13 +900,8 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
             return
         }
         runOnLiveWebView { webView ->
-            val payload = JSONObject()
-                .put("requestId", pending.requestId)
-                .put("text", pending.text)
-                .toString()
-            webView.evaluateJavascript("window.GecisChat && window.GecisChat.onResumeTurn($payload);") {
-                then?.invoke()
-            }
+            val payload = JSONObject().put("requestId", pending.requestId).put("text", pending.text).toString()
+            webView.evaluateJavascript("window.GecisChat && window.GecisChat.onResumeTurn($payload);") { then?.invoke() }
         }
     }
 
@@ -967,5 +981,10 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
         private const val APP_URL = "https://$APP_HOST/assets/index.html"
         private const val APP_RETURN_SCHEME = "gecis"
         private const val APP_RETURN_HOST = "oauth-complete"
+        private const val RUNTIME_PREFS = "gecis_runtime_settings"
+        private const val PREF_MODEL = "model"
+        private const val PREF_EFFORT = "effort"
+        private const val DEFAULT_EFFORT = "medium"
+        private val ALLOWED_EFFORTS = setOf("low", "medium", "high")
     }
 }

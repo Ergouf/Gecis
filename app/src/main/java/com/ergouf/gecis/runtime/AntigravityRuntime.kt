@@ -30,6 +30,12 @@ class AntigravityRuntime(
     /** When set, next process spawn resumes this agy conversation. */
     @Volatile var resumeConversationId: String? = null
 
+    /** Optional CLI model slug applied whenever a process is spawned. */
+    @Volatile var modelSlug: String? = null
+
+    /** Optional Antigravity reasoning effort: low, medium, or high. */
+    @Volatile var reasoningEffort: String? = null
+
     /** Called when agy reports a conversation id (init event). */
     @Volatile var onConversationId: ((String) -> Unit)? = null
 
@@ -71,7 +77,12 @@ class AntigravityRuntime(
 
                 val input = JSONObject()
                     .put("event", "user")
-                    .put("message", JSONObject().put("content", text))
+                    .put(
+                        "message",
+                        JSONObject()
+                            .put("role", "user")
+                            .put("content", text),
+                    )
 
                 localWriter!!.apply {
                     write(input.toString())
@@ -95,13 +106,12 @@ class AntigravityRuntime(
         }
     }
 
-    /** Surface a stuck first turn instead of leaving the UI pending forever. */
+    /** Surface a stuck turn instead of leaving the UI pending forever. */
     private fun scheduleTurnTimeout(requestId: String) {
         mainHandler.postDelayed({
             val active = synchronized(lock) {
                 pending?.takeIf { it.requestId == requestId }
             } ?: return@postDelayed
-            // First-token silence: kill and report with stderr tail.
             val message = buildFailureMessage(
                 "AI runtime 长时间无响应（${TURN_TIMEOUT_MS / 1000}s）。" +
                     "请检查网络、登录状态，或稍后重试。",
@@ -138,10 +148,16 @@ class AntigravityRuntime(
 
         // Use Antigravity's own credential files rather than relying on JETSKI_OAUTH_TOKEN.
         // The encrypted Android Keystore vault remains the durable source. Plaintext exists only
-        // inside the app-private sandbox while agy is starting/refeshing its session.
+        // inside the app-private sandbox while agy is starting/refreshing its session.
         AntigravityEnvironment.materializeOAuthToken(context, oauthCredential)
 
-        val builder = ProcessBuilder(spec.headlessCommand(resumeConversationId))
+        val builder = ProcessBuilder(
+            spec.headlessCommand(
+                resumeId = resumeConversationId,
+                modelSlug = modelSlug,
+                effort = reasoningEffort,
+            ),
+        )
             .directory(context.noBackupFilesDir)
             .redirectErrorStream(false)
 
@@ -281,6 +297,10 @@ class AntigravityRuntime(
             "init" -> {
                 val id = event.optString("conversation_id")
                 if (id.isNotBlank()) {
+                    // Keep the backend conversation identity in the runtime itself. If agy exits,
+                    // times out, or is recreated after re-authentication, the next process must
+                    // resume this conversation instead of silently starting a fresh one.
+                    resumeConversationId = id
                     mainHandler.post { onConversationId?.invoke(id) }
                 }
             }
@@ -505,8 +525,12 @@ internal data class NativeRuntimeSpec(
     val nativeDir: File,
     val runtimeLibDir: File,
 ) {
-    fun headlessCommand(resumeId: String? = null): List<String> {
-        val base = baseCommand() + listOf(
+    fun headlessCommand(
+        resumeId: String? = null,
+        modelSlug: String? = null,
+        effort: String? = null,
+    ): List<String> {
+        val args = (baseCommand() + listOf(
             "--input-format",
             "stream-json",
             "--output-format",
@@ -514,9 +538,11 @@ internal data class NativeRuntimeSpec(
             "--sandbox",
             "--print-timeout",
             "5m",
-        )
-        val id = resumeId?.trim().orEmpty()
-        return if (id.isNotEmpty()) base + listOf("--conversation", id) else base
+        )).toMutableList()
+        resumeId?.trim()?.takeIf { it.isNotEmpty() }?.let { args += listOf("--conversation", it) }
+        modelSlug?.trim()?.takeIf { it.isNotEmpty() }?.let { args += listOf("--model", it) }
+        effort?.trim()?.lowercase()?.takeIf { it in ALLOWED_EFFORTS }?.let { args += listOf("--effort", it) }
+        return args
     }
 
     fun interactiveCommand(): List<String> = baseCommand()
@@ -531,6 +557,7 @@ internal data class NativeRuntimeSpec(
     companion object {
         private const val LIBRARY_MAP_ASSET = "runtime/native-libs.map"
         private const val RUNTIME_LIB_DIR = "native-runtime-libs"
+        private val ALLOWED_EFFORTS = setOf("low", "medium", "high")
         private val SAFE_ORIGINAL_NAME = Regex("^[A-Za-z0-9._+\\-]+$")
         private val SAFE_PACKAGED_NAME = Regex("^libgecis_[A-Za-z0-9_+\\-]+\\.so$")
 

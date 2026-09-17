@@ -1,6 +1,6 @@
 [package]
 name = "gecis-windows"
-version = "0.3.5"
+version = "0.3.6"
 description = "Gecis Windows desktop shell"
 authors = ["Gecis"]
 edition = "2021"

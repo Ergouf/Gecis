@@ -22,7 +22,7 @@ impl KnowledgeBase {
             .unwrap_or(false)
     }
 
-    fn database_path(&self) -> Option<PathBuf> {
+    pub(crate) fn database_path(&self) -> Option<PathBuf> {
         let path = self.dir.join("fenbi.db");
         path.is_file().then_some(path)
     }
@@ -85,7 +85,7 @@ impl KnowledgeBase {
         }
     }
 
-    fn retrieve(&self, query: &str, limit: usize) -> Result<Vec<Snippet>, String> {
+    pub(crate) fn retrieve(&self, query: &str, limit: usize) -> Result<Vec<Snippet>, String> {
         let Some(path) = self.database_path() else {
             return Ok(vec![]);
         };
@@ -179,9 +179,9 @@ fn validate_fenbi(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-struct Snippet {
-    source: String,
-    text: String,
+pub(crate) struct Snippet {
+    pub source: String,
+    pub text: String,
 }
 
 struct TableBinding {
@@ -218,6 +218,25 @@ struct Scored {
 
 fn quote(ident: &str) -> String {
     format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
+fn cell_to_string(row: &rusqlite::Row, idx: usize) -> String {
+    match row.get_ref(idx) {
+        Ok(rusqlite::types::ValueRef::Null) => String::new(),
+        Ok(rusqlite::types::ValueRef::Text(bytes)) => String::from_utf8_lossy(bytes).into_owned(),
+        Ok(rusqlite::types::ValueRef::Integer(value)) => value.to_string(),
+        Ok(rusqlite::types::ValueRef::Real(value)) => value.to_string(),
+        Ok(rusqlite::types::ValueRef::Blob(_)) => String::new(),
+        Err(_) => String::new(),
+    }
+}
+
+fn empty_to_none(value: String) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn discover_tables(conn: &Connection) -> Result<Vec<TableBinding>, String> {
@@ -332,14 +351,14 @@ fn query_table(
     let rows = stmt
         .query_map(rusqlite::params_from_iter(args.iter()), |row| {
             Ok((
-                row.get::<_, Option<String>>(0).unwrap_or_default().unwrap_or_default(),
-                row.get::<_, Option<String>>(1).unwrap_or_default().unwrap_or_default(),
-                row.get::<_, Option<String>>(2).unwrap_or_default(),
-                row.get::<_, Option<String>>(3).unwrap_or_default(),
-                row.get::<_, Option<String>>(4).unwrap_or_default(),
-                row.get::<_, Option<String>>(5).unwrap_or_default(),
-                row.get::<_, Option<String>>(6).unwrap_or_default(),
-                row.get::<_, Option<String>>(7).unwrap_or_default(),
+                cell_to_string(row, 0),
+                cell_to_string(row, 1),
+                empty_to_none(cell_to_string(row, 2)),
+                empty_to_none(cell_to_string(row, 3)),
+                empty_to_none(cell_to_string(row, 4)),
+                empty_to_none(cell_to_string(row, 5)),
+                empty_to_none(cell_to_string(row, 6)),
+                empty_to_none(cell_to_string(row, 7)),
             ))
         })
         .map_err(|e| e.to_string())?;
@@ -486,14 +505,9 @@ fn parse_options(raw: Option<String>, raw_json: Option<String>) -> Vec<String> {
     if text.trim().is_empty() {
         return vec![];
     }
-    let raw_re = regex::Regex::new(r"(?is)(?:^|\s|\|)([A-D])[.．、]\s*(.*?)(?=(?:(?:\s*\|\s*|\s+)[A-D][.．、]\s*)|$)").unwrap();
-    let matches: Vec<String> = raw_re
-        .captures_iter(&text)
-        .filter_map(|c| c.get(2).map(|m| m.as_str().trim().to_string()))
-        .filter(|s| !s.is_empty())
-        .collect();
-    if matches.len() == 4 {
-        return matches;
+    let labeled = split_labeled_options(&text);
+    if labeled.len() == 4 {
+        return labeled;
     }
     let label_re = regex::Regex::new(r"(?i)^\s*[A-D][.．、]\s*").unwrap();
     let lines: Vec<String> = text
@@ -508,6 +522,28 @@ fn parse_options(raw: Option<String>, raw_json: Option<String>) -> Vec<String> {
     } else {
         vec![]
     }
+}
+
+fn split_labeled_options(text: &str) -> Vec<String> {
+    let re = regex::Regex::new(r"(?i)(?:^|[\s|])([A-D])[.．、]\s*").unwrap();
+    let spans: Vec<(usize, usize)> = re.find_iter(text).map(|m| (m.start(), m.end())).collect();
+    if spans.len() != 4 {
+        return vec![];
+    }
+    let mut out = Vec::with_capacity(4);
+    for i in 0..4 {
+        let start = spans[i].1;
+        let end = if i + 1 < 4 { spans[i + 1].0 } else { text.len() };
+        if start > end || !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+            return vec![];
+        }
+        let piece = text[start..end].trim().trim_matches('|').trim();
+        if piece.is_empty() {
+            return vec![];
+        }
+        out.push(piece.to_string());
+    }
+    out
 }
 
 fn parse_json_options(raw: Option<&String>) -> Option<Vec<String>> {
@@ -547,7 +583,9 @@ fn search_terms(query: &str) -> Vec<String> {
     }
     let stripped = strip_prompt_prefix(&cleaned);
     let mut output: Vec<String> = vec![];
-    if stripped.chars().count() >= 2 {
+    let stripped_len = stripped.chars().count();
+    // Full-prompt LIKE against 80万+ rows never matches and forces a table scan.
+    if (2..=16).contains(&stripped_len) {
         output.push(stripped.clone());
     }
     let split_re = regex::Regex::new(r"[\s，。！？；：,.!?;:、（）()\[\]{}<>《》]+").unwrap();
@@ -558,8 +596,10 @@ fn search_terms(query: &str) -> Vec<String> {
         .collect();
     chunks.sort_by_key(|c| std::cmp::Reverse(c.chars().count()));
     for chunk in chunks {
-        output.push(chunk.clone());
         let len = chunk.chars().count();
+        if len <= 16 {
+            output.push(chunk.clone());
+        }
         if (5..=12).contains(&len) && chunk.chars().any(|c| matches!(c as u32, 0x3400..=0x9FFF)) {
             let chars: Vec<char> = chunk.chars().collect();
             for start in 0..=(len.saturating_sub(4)) {
@@ -703,4 +743,49 @@ fn render_question(question: &QuestionRow) -> String {
     }
     out.push_str(&format!("来源：{}", question.source_table));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn retrieve_reads_integer_id_and_real_ratio() {
+        let dir = std::env::temp_dir().join(format!("gecis-fenbi-intid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fenbi.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE fenbi_paper_questions (
+                id INTEGER PRIMARY KEY,
+                stem TEXT,
+                options TEXT,
+                correct_answer TEXT,
+                correct_ratio REAL,
+                analysis TEXT
+            );
+            INSERT INTO fenbi_paper_questions (id, stem, options, correct_answer, correct_ratio, analysis)
+            VALUES (42, '根据宪法规定，下列属于法律的是', 'A. 条例
+B. 法律
+C. 决定
+D. 命令', 'B', 0.61, '常识判断法律题解析');",
+        )
+        .unwrap();
+        drop(conn);
+        let kb = KnowledgeBase::open(&dir);
+        let hits = kb.retrieve("常识 法律", 3).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].source.contains("42"), "{}", hits[0].source);
+        assert!(hits[0].text.contains("正确率61%"), "{}", hits[0].text);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_terms_skips_long_prompts() {
+        let terms = search_terms("根据fenbi.db，制订一套公务员行测常识法律部分学习计划，并开始给我出题讲解");
+        assert!(terms.iter().all(|t| t.chars().count() <= 16), "{terms:?}");
+        assert!(terms.iter().any(|t| t.contains("法律") || t.contains("常识")), "{terms:?}");
+    }
 }

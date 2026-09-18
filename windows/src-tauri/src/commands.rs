@@ -1,6 +1,7 @@
 use crate::runtime::{
-    install_hint, locate_agy, probe_authentication, start_background_login,
-    AntigravityRuntime, RuntimeEvent,
+    fetch_available_models, install_hint, load_runtime_settings, locate_agy,
+    probe_authentication, save_runtime_settings, start_background_login, AntigravityRuntime,
+    RuntimeEvent,
 };
 use crate::{AppState, PendingRequest};
 use serde_json::{json, Value};
@@ -386,6 +387,28 @@ pub fn runtime_status() -> Result<Value, String> {
 
 /// Setup checklist for the empty state: hide steps the user already finished.
 #[tauri::command]
+pub fn get_runtime_settings() -> Result<Value, String> {
+    Ok(load_runtime_settings())
+}
+
+#[tauri::command]
+pub fn get_available_models() -> Result<Value, String> {
+    fetch_available_models(Duration::from_secs(20))
+}
+
+#[tauri::command]
+pub fn set_runtime_settings(app: AppHandle, model: String, effort: Option<String>) -> Result<Value, String> {
+    let _ = effort;
+    ensure_idle(&app)?;
+    let settings = save_runtime_settings(&model)?;
+    if let Ok(mut slot) = app.state::<AppState>().runtime.lock() {
+        *slot = None;
+    }
+    emit_status(&app, "模型设置已应用", "success");
+    Ok(settings)
+}
+
+#[tauri::command]
 pub fn get_setup_status(app: AppHandle) -> Result<Value, String> {
     let has_agy = locate_agy().is_ok();
     let state = app.state::<AppState>();
@@ -714,31 +737,40 @@ fn pick_fenbi_file(app: &AppHandle) -> Option<PathBuf> {
 
 fn pump_runtime_events(app: AppHandle, request_id: String, original_text: String, done_tx: Sender<()>) {
     let mut idle_ticks = 0u32;
+    let mut phase = "正在思考…".to_string();
     loop {
         let events = poll(&app);
         if !events.is_empty() {
             idle_ticks = 0;
         } else {
             idle_ticks = idle_ticks.saturating_add(1);
+            if idle_ticks > 0 && idle_ticks % 100 == 0 {
+                let label = if idle_ticks >= 200 && !phase.contains("查询") {
+                    "仍在思考…".to_string()
+                } else {
+                    phase.clone()
+                };
+                emit_status(&app, &label, "working");
+            }
         }
         let mut finished = false;
 
         for event in events {
             match event {
-                RuntimeEvent::Status { text, state } => emit_status(&app, &text, &state),
+                RuntimeEvent::Status { text, state } => {
+                    if state == "working" && !text.is_empty() {
+                        phase = text.clone();
+                    }
+                    emit_status(&app, &text, &state);
+                }
                 RuntimeEvent::ConversationId { id } => {
                     let state = app.state::<AppState>();
-                    if let Ok(conversation) = state.current_conversation.lock() {
-                        if let Some(local_id) = *conversation {
-                            if let Ok(history) = state.history.lock() {
-                                let _ = history.set_agy_conversation_id(local_id, &id);
-                            }
+                    let local_id = state.current_conversation.lock().ok().and_then(|c| *c);
+                    if let Some(local_id) = local_id {
+                        if let Ok(history) = state.history.lock() {
+                            let _ = history.set_agy_conversation_id(local_id, &id);
                         }
                     }
-                    let _ = app.emit(
-                        "gecis://status",
-                        json!({"text": format!("会话ID已绑定"), "state": "idle"}),
-                    );
                 }
                 RuntimeEvent::Delta { request_id: rid, text } => {
                     let rid = if rid.is_empty() {
@@ -788,7 +820,7 @@ fn pump_runtime_events(app: AppHandle, request_id: String, original_text: String
                         "连接账号后会自动继续刚才的问题。",
                         json!([{"id":"login","label":"去登录","primary":true}]),
                     );
-                    emit_status(&app, "等待连接 Google 账号", "idle");
+                    emit_status(&app, "等待连接 Google 账号", "working");
                     finished = true;
                 }
             }
@@ -798,8 +830,8 @@ fn pump_runtime_events(app: AppHandle, request_id: String, original_text: String
             break;
         }
 
-        // ~15s without any runtime event while pending → probe process and fail fast.
-        if idle_ticks >= 375 {
+        // ~4 minutes without any runtime event while pending → fail visibly.
+        if idle_ticks >= 6000 {
             let pending = {
                 let state = app.state::<AppState>();
                 state

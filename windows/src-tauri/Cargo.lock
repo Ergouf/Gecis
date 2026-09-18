@@ -1105,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "gecis-windows"
-version = "0.3.1"
+version = "0.3.6"
 dependencies = [
  "chrono",
  "dirs 5.0.1",

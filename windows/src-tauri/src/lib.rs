@@ -1,4 +1,5 @@
 mod commands;
+mod fenbi_mcp;
 mod history;
 mod knowledge;
 mod runtime;
@@ -48,6 +49,7 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| dirs::data_dir().unwrap_or_default().join("Gecis"));
+            runtime::set_app_data_dir(data_dir.clone());
             std::fs::create_dir_all(&data_dir).map_err(|e| format!("无法创建数据目录: {e}"))?;
             let history = HistoryStore::open(&data_dir.join("gecis_history.db"))
                 .map_err(|e| format!("历史库初始化失败: {e}"))?;
@@ -95,6 +97,9 @@ pub fn run() {
             commands::export_conversation,
             commands::resume_conversation,
             commands::get_setup_status,
+            commands::get_runtime_settings,
+            commands::get_available_models,
+            commands::set_runtime_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Gecis Windows application");

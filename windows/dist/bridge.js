@@ -68,6 +68,18 @@
     exportConversation(format) {
       return invoke('export_conversation', { format });
     },
+    getRuntimeSettings() {
+      return invoke('get_runtime_settings');
+    },
+    getAvailableModels() {
+      return invoke('get_available_models').then((parsed) => {
+        if (parsed?.error) throw new Error(parsed.error);
+        return parsed;
+      });
+    },
+    setRuntimeSettings(model, effort) {
+      return invoke('set_runtime_settings', { model: model || '', effort: effort || '' });
+    },
   };
 
   window.GecisBridgeReady = (async () => {

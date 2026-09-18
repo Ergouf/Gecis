@@ -89,6 +89,171 @@ function setStatus(text, state = 'idle') {
   if (state === 'success') statusResetTimer = setTimeout(() => setStatus('', 'idle'), 2600);
 }
 
+let turnClock = null;
+let turnStartedAt = 0;
+
+function stopTurnClock() {
+  clearInterval(turnClock);
+  turnClock = null;
+}
+
+function showTurnProgress(text) {
+  const label = text || '正在思考…';
+  setStatus(label, 'working');
+  if (!active || active.text) return;
+  let hint = active.bubble.querySelector('.turn-progress');
+  if (!hint) {
+    hint = document.createElement('div');
+    hint.className = 'turn-progress';
+    hint.setAttribute('aria-live', 'polite');
+    active.bubble.appendChild(hint);
+  }
+  hint.textContent = label;
+}
+
+function startTurnClock() {
+  stopTurnClock();
+  turnStartedAt = Date.now();
+  turnClock = setInterval(() => {
+    if (!active || active.text) {
+      stopTurnClock();
+      return;
+    }
+    const current = statusEl.textContent || '';
+    if (/查询|失败|错误|连接|准备|登录|回答/.test(current)) return;
+    const elapsed = Math.round((Date.now() - turnStartedAt) / 1000);
+    showTurnProgress(elapsed >= 8 ? '仍在思考…' : '正在思考…');
+  }, 4000);
+}
+
+const providerModelSelect = document.getElementById('providerModelSelect');
+const providerVariantSelect = document.getElementById('providerVariantSelect');
+const refreshProviderModels = document.getElementById('refreshProviderModels');
+let providerFamilies = [];
+let currentModelSlug = null;
+let applyingModel = false;
+
+function familyForSlug(slug) {
+  return providerFamilies.find((family) => (family.variants || []).some((variant) => variant.slug === slug));
+}
+
+function preferredVariant(family) {
+  const variants = family?.variants || [];
+  return variants.find((variant) => variant.effort === 'medium') || variants[0] || null;
+}
+
+function renderProviderVariants(family, selectedSlug) {
+  if (!providerVariantSelect) return family?.variants?.[0] || null;
+  const variants = family?.variants || [];
+  providerVariantSelect.replaceChildren();
+  if (variants.length <= 1) {
+    providerVariantSelect.hidden = true;
+    return variants[0] || null;
+  }
+  for (const variant of variants) {
+    const option = document.createElement('option');
+    option.value = variant.slug;
+    option.textContent = variant.label || variant.effort || '默认';
+    providerVariantSelect.appendChild(option);
+  }
+  const selected = variants.find((variant) => variant.slug === selectedSlug) || preferredVariant(family);
+  if (selected) providerVariantSelect.value = selected.slug;
+  providerVariantSelect.hidden = false;
+  return selected;
+}
+
+function renderProviderCatalog(selectedSlug) {
+  if (!providerModelSelect) return;
+  providerModelSelect.replaceChildren();
+  const auto = document.createElement('option');
+  auto.value = '';
+  auto.textContent = '自动选择模型';
+  providerModelSelect.appendChild(auto);
+  for (const family of providerFamilies) {
+    const option = document.createElement('option');
+    option.value = family.id;
+    option.textContent = family.label;
+    providerModelSelect.appendChild(option);
+  }
+  const family = familyForSlug(selectedSlug);
+  providerModelSelect.value = family?.id || '';
+  renderProviderVariants(family, selectedSlug);
+}
+
+function setProviderControlsDisabled(disabled) {
+  if (providerModelSelect) providerModelSelect.disabled = disabled;
+  if (providerVariantSelect) providerVariantSelect.disabled = disabled;
+  if (refreshProviderModels) refreshProviderModels.disabled = disabled;
+}
+
+async function applyModelSlug(slug, label) {
+  if (applyingModel || !window.GecisNative?.setRuntimeSettings) return;
+  applyingModel = true;
+  setProviderControlsDisabled(true);
+  try {
+    setStatus('正在切换模型…', 'working');
+    const settings = await window.GecisNative.setRuntimeSettings(slug || '', '');
+    currentModelSlug = settings?.model || null;
+    setStatus(`已切换到 ${label || '自动模型'}`, 'success');
+  } catch (error) {
+    setStatus(error?.message || '模型切换失败', 'error');
+    renderProviderCatalog(currentModelSlug);
+  } finally {
+    applyingModel = false;
+    setProviderControlsDisabled(false);
+  }
+}
+
+async function reloadProviderModels({ quiet = false } = {}) {
+  if (!providerModelSelect || !window.GecisNative?.getAvailableModels) return;
+  setProviderControlsDisabled(true);
+  if (!quiet) providerModelSelect.innerHTML = '<option value="">读取模型…</option>';
+  try {
+    const [settings, catalog] = await Promise.all([
+      window.GecisNative.getRuntimeSettings?.() || Promise.resolve({}),
+      window.GecisNative.getAvailableModels(),
+    ]);
+    providerFamilies = Array.isArray(catalog?.models) ? catalog.models : [];
+    if (!providerFamilies.length) throw new Error('上游没有返回可用模型');
+    currentModelSlug = settings?.model || catalog?.selected || null;
+    if (currentModelSlug && !familyForSlug(currentModelSlug)) {
+      await window.GecisNative.setRuntimeSettings?.('', '');
+      currentModelSlug = null;
+      setStatus('旧模型已不可用，已切换为自动模型', 'success');
+    }
+    renderProviderCatalog(currentModelSlug);
+  } catch (error) {
+    providerModelSelect.replaceChildren();
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = '模型列表不可用';
+    providerModelSelect.appendChild(option);
+    if (providerVariantSelect) providerVariantSelect.hidden = true;
+    if (!quiet) setStatus(error?.message || '读取模型列表失败', 'error');
+  } finally {
+    setProviderControlsDisabled(false);
+  }
+}
+
+if (providerModelSelect && providerVariantSelect && refreshProviderModels) {
+  providerModelSelect.addEventListener('change', async () => {
+    if (!providerModelSelect.value) {
+      providerVariantSelect.hidden = true;
+      await applyModelSlug('', '自动模型');
+      return;
+    }
+    const family = providerFamilies.find((item) => item.id === providerModelSelect.value);
+    const variant = renderProviderVariants(family, null);
+    if (variant) await applyModelSlug(variant.slug, `${family.label}${variant.effort ? ` · ${variant.label}` : ''}`);
+  });
+  providerVariantSelect.addEventListener('change', async () => {
+    const family = providerFamilies.find((item) => item.id === providerModelSelect.value);
+    const variant = (family?.variants || []).find((item) => item.slug === providerVariantSelect.value);
+    if (variant) await applyModelSlug(variant.slug, `${family.label} · ${variant.label}`);
+  });
+  refreshProviderModels.addEventListener('click', () => reloadProviderModels());
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -172,11 +337,14 @@ function beginAssistant(requestId, row = null) {
   }
   bubble.innerHTML = '';
   active = { requestId, row: target, bubble, text: '' };
+  showTurnProgress('正在思考…');
+  startTurnClock();
   syncComposer();
   return active;
 }
 
 function finish() {
+  stopTurnClock();
   active = null;
   syncComposer();
   if (statusEl.dataset.state === 'working') setStatus('', 'idle');
@@ -476,9 +644,17 @@ async function importFenbi() {
 window.GecisChat = {
   onStatus(event) {
     if (!event) return;
-    setStatus(event.text, event.state || 'idle');
-    if (event.state === 'success' && /登录|账号.*连接/.test(event.text || '')) refreshSetupStatus();
+    if (event.state === 'success' && /登录|账号.*连接/.test(event.text || '')) {
+      refreshSetupStatus();
+      reloadProviderModels({ quiet: true });
+    }
     if (event.state === 'success' && /导入成功/.test(event.text || '')) refreshSetupStatus();
+    if (active && (event.state === 'idle' || event.state === 'success')) return;
+    if (active && event.state === 'working') {
+      showTurnProgress(event.text || '正在思考…');
+      return;
+    }
+    setStatus(event.text, event.state || 'idle');
     if (event.state === 'error' && /导入失败|文件选择器/.test(event.text || '')) {
       const row = addMessage('assistant', '', '');
       renderActionCard(row, {
@@ -490,7 +666,8 @@ window.GecisChat = {
   onSetupStatus(event) { applySetupStatus(event); },
   onHistory(snapshot, forceReplace = false) {
     renderProjectList(snapshot);
-    if (forceReplace || !historyInitialized) { historyInitialized = true; if (!active) replaceConversation(snapshot); }
+    if (active) return;
+    if (forceReplace || !historyInitialized) { historyInitialized = true; replaceConversation(snapshot); }
   },
   onResumeTurn(event) {
     if (!event?.requestId || active) return;
@@ -501,7 +678,11 @@ window.GecisChat = {
   },
   onNativeEvent(event) {
     if (!event) return;
-    if (event.type === 'setup_status') { applySetupStatus(event); return; }
+    if (event.type === 'setup_status') {
+      applySetupStatus(event);
+      if (event.auth === 'connected') reloadProviderModels({ quiet: true });
+      return;
+    }
     if (event.type === 'runtime_hint') return;
     const matchesActive = active && (!event.requestId || event.requestId === active.requestId);
     if (event.type === 'action_required') {
@@ -517,7 +698,12 @@ window.GecisChat = {
       }
       return;
     }
+    if (event.type === 'progress') {
+      showTurnProgress(event.text || '正在思考…');
+      return;
+    }
     if (event.type === 'delta') {
+      active.bubble.querySelector('.turn-progress')?.remove();
       active.text += event.text || '';
       renderAssistant(active.bubble, active.text);
       window.scrollTo({ top: document.body.scrollHeight });
@@ -526,6 +712,19 @@ window.GecisChat = {
     active.row.classList.remove('pending');
     if (event.type === 'complete') {
       active.text = event.text || active.text;
+      if (!String(active.text || '').trim()) {
+        const row = active.row;
+        const requestId = active.requestId;
+        finish();
+        renderActionCard(row, {
+          type: 'action_required',
+          requestId,
+          kind: 'network',
+          title: '没有生成内容',
+          message: '题库查询后没有返回回答，请重试。',
+        });
+        return;
+      }
       renderAssistant(active.bubble, active.text);
       pendingRequests.delete(active.requestId);
       finish();
@@ -605,7 +804,7 @@ form.addEventListener('submit', async (event) => {
   addMessage('user', text);
   input.value = ''; input.style.height = 'auto';
   beginAssistant(requestId);
-  setStatus('正在准备…', 'working');
+  showTurnProgress('正在准备…');
   try { await window.GecisNative.sendMessage(requestId, text); }
   catch (error) { window.GecisChat.onNativeEvent({ type: 'error', requestId, text: error.message }); }
 });
@@ -620,4 +819,5 @@ window.GecisBridgeReady?.then?.(async () => {
     applySnapshot(await window.GecisNative.getHistory(), !historyInitialized);
     historyInitialized = true;
   } catch (error) { setStatus(error.message || '历史记录不可用', 'error'); }
+  reloadProviderModels({ quiet: true });
 });

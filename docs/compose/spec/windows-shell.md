@@ -10,13 +10,14 @@ commits: 654ee66bd0c8669cac56720503b80ef8ab418b54..HEAD
 
 ## Report
 
-**What was built** — Gecis Windows 桌面子项目：Tauri 2 + WebView2 壳，复用 Android 聊天交互契约，本地 SQLite 历史、官方 `agy` headless NDJSON 流式对话。fenbi 检索改为 **MCP 工具 `search_fenbi`，由模型自行决定是否调用、搜什么关键词**；程序不再预检索/注入 `<fenbi_context>`。Android 同步：内置 HTTP MCP，启动前写入私有 HOME 的 `mcp_config.json`。
+**What was built** — Gecis Windows 桌面子项目：Tauri 2 + WebView2 壳，复用 Android 聊天交互契约，本地 SQLite 历史、官方 `agy` headless NDJSON 流式对话。fenbi 由 MCP 工具 `fenbi_schema` / `fenbi_get` / `fenbi_query` 直接读库（沙箱 SELECT，不是关键词 LIKE）；程序不再预检索/注入 `<fenbi_context>`。Android 同步：内置 HTTP MCP，启动前写入私有 HOME 的 `mcp_config.json` 与 `config.json` grants。
 
 **Verification** — `cargo check` PASS；`cargo run --bin e2e_chat` runtime 层 PASS；**真 E2E `npm run e2e`（WebdriverIO + tauri-driver 驱动 `gecis-windows.exe` UI）PASS，助手气泡显示「收到」**；`npm run build` PASS（NSIS/MSI）。
 
 **Journey log**
 - stream-json 实际字段是 `conversation_id` + `text_delta` + `result.status=SUCCESS`，不是 request_id。
-- 「模型决定搜索」→ MCP `search_fenbi`，两端去掉 KnowledgeAugmentingRuntime 预注入。
+- 「模型直接读库」→ MCP `fenbi_schema` / `fenbi_get` / `fenbi_query`，两端去掉 KnowledgeAugmentingRuntime 预注入。
+- Windows `agy` 使用独立 `USERPROFILE`（`runtime/agy-home`），只加载 `gecis-fenbi`，不读用户全局 `mcp_config.json`（避免 serena 等工具挤爆首轮 generate）。对话 / 登录 / 探测共用该 home，Google 登录才能跨启动保留。
 - `e2e_chat` 只是 runtime 冒烟，不算 E2E；真 E2E 必须启动桌面二进制并断言 UI 气泡。
 
 ## [S1] Problem
@@ -32,7 +33,7 @@ Android 版 Gecis 已交付单 APK 对话体验，但 Windows 缺少对应桌面
 1. 连续对话 UI（Markdown + KaTeX），复用 Android `index.html` 交互契约。
 2. 窄原生桥 `GecisNative`：`sendMessage` / `getHistory` / `createProject` / `newConversation` / `openConversation`，以及 `runtimeStatus` / `startLogin` / `installRuntime` / `importFenbi`。
 3. AI runtime：探测系统 `agy`，以 `--input-format stream-json --output-format stream-json --sandbox --print-timeout 5m` 常驻；NDJSON 事件 `step_update` / `result`。
-4. 知识库：顶栏显式导入 `fenbi.db`；**模型通过 MCP 工具 `search_fenbi` 自行决定检索**，应用不预计算查询词、不注入上下文。
+4. 知识库：顶栏显式导入 `fenbi.db`；**模型通过 MCP 工具 `fenbi_schema` / `fenbi_get` / `fenbi_query` 直接读库**，应用不预计算查询词、不注入上下文。
 5. 历史：本地 SQLite `gecis_history.db`。
 6. 认证：不自写 PKCE；未登录时 `start_login` 打开新控制台运行 `agy`。
 
@@ -68,4 +69,4 @@ Android 版 Gecis 已交付单 APK 对话体验，但 Windows 缺少对应桌面
 - [x] T5: agy 运行时流式对话 — acceptance: 探测失败给出指引；成功时 delta/complete 事件推进 UI (covers: S2)
 - [x] T6: 构建验证 — acceptance: `cargo check` / `npm run build` 或 `tauri build` 至少编译通过 (covers: S2)
 - [x] T7: 修复无认证/无响应 — acceptance: 探测 `%LOCALAPPDATA%\agy\bin`；发送失败回传 UI；fenbi 不阻塞；登录/安装入口可用 (covers: S2)
-- [x] T8: fenbi 由模型检索 + Windows e2e — acceptance: 注册 MCP `search_fenbi`，去掉预注入；`cargo run --bin e2e_chat` 返回模型回复 (covers: S2)
+- [x] T8: fenbi 由模型直接读库 + Windows e2e — acceptance: 注册 MCP `fenbi_schema`/`fenbi_get`/`fenbi_query`，去掉预注入与 `search_fenbi`；`cargo run --bin e2e_chat` 返回模型回复 (covers: S2)

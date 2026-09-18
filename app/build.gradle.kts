@@ -22,7 +22,7 @@ android {
         applicationId = "com.ergouf.gecis"
         minSdk = 26
         targetSdk = 35
-        versionCode = 19
+        versionCode = 26
         versionName = "0.3.6"
 
         ndk {
@@ -69,6 +69,15 @@ android {
         jniLibs {
             useLegacyPackaging = true
             keepDebugSymbols += setOf("**/libgecis_*.so")
+        }
+    }
+
+    sourceSets {
+        getByName("main") {
+            assets.srcDir(layout.buildDirectory.dir("generated/fenbi-mcp-assets"))
+        }
+        getByName("test") {
+            resources.srcDir(rootProject.file("shared/fenbi-mcp"))
         }
     }
 }
@@ -126,12 +135,22 @@ val verifyGeneratedPayloads = tasks.register("verifyGeneratedPayloads") {
     }
 }
 
+val copyFenbiMcpContract = tasks.register<Copy>("copyFenbiMcpContract") {
+    from(rootProject.file("shared/fenbi-mcp"))
+    into(layout.buildDirectory.dir("generated/fenbi-mcp-assets/fenbi-mcp"))
+}
+
 tasks.configureEach {
-    if (name == "preBuild") dependsOn(verifyGeneratedPayloads)
+    if (name == "preBuild") {
+        dependsOn(verifyGeneratedPayloads)
+        dependsOn(copyFenbiMcpContract)
+    }
     if (name == "preReleaseBuild") dependsOn(verifyReleaseSigningConfig)
 }
 
 dependencies {
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.webkit:webkit:1.13.0")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

@@ -100,12 +100,14 @@ class MainActivity : ComponentActivity(), ChatRuntime.Listener, AntigravityOAuth
                         FenbiKnowledgeBase.ImportPhase.COPYING -> formatCopyProgress(progress)
                         FenbiKnowledgeBase.ImportPhase.VALIDATING -> "文件复制完成，正在校验数据库…"
                         FenbiKnowledgeBase.ImportPhase.SAVING -> "校验通过，正在完成导入…"
+                        FenbiKnowledgeBase.ImportPhase.INDEXING -> "正在建立索引…"
                     }
                     emitStatus(status, "working")
                 }
                 runOnUiThread {
                     if (isDestroyed) return@runOnUiThread
                     fenbiImportOnly = false
+                    restartRuntimeForCurrentConversation()
                     if (pendingAfterDatabase != null && pendingAfterDatabase?.requestId == pending?.requestId) {
                         pendingAfterDatabase = null
                         persistPendingState()

@@ -528,6 +528,12 @@ pub async fn import_fenbi(app: AppHandle) -> Result<String, String> {
         let mut knowledge = state.knowledge.lock().map_err(|e| e.to_string())?;
         match knowledge.import_from(&path) {
             Ok(name) => {
+                emit_status(&app2, "正在建立索引…", "working");
+                knowledge.ensure_indexes();
+                drop(knowledge);
+                if let Ok(mut slot) = state.runtime.lock() {
+                    *slot = None;
+                }
                 emit_status(&app2, &format!("{name} 导入成功"), "success");
                 Ok(name)
             }
@@ -635,7 +641,7 @@ fn handle_send(app: AppHandle, request_id: String, text: String, persist: bool) 
         persist_user_message(&app, &text)?;
     }
 
-    // Model decides when/how to search via MCP `search_fenbi`. No program-side pre-retrieval.
+    // Model reads fenbi.db via MCP (fenbi_schema / fenbi_get / fenbi_query). No prompt injection.
     let augmented = text.clone();
 
     emit_status(&app, "正在连接 AI runtime…", "working");

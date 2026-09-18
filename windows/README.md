@@ -45,7 +45,7 @@ npm run build
 - 连续对话 UI（Markdown + KaTeX）
 - Windows 宽屏常驻会话侧栏；窄窗与 Android 使用抽屉
 - 登录、运行环境和网络问题通过会话内行动卡引导处理
-- **模型自主检索**：MCP 工具 `search_fenbi`，由 Gemini/Antigravity 决定何时搜、搜什么（不在应用侧预检索）
+- **模型直接读库**：MCP 工具 `fenbi_schema` / `fenbi_get` / `fenbi_query`，由 Gemini/Antigravity 对本地 fenbi.db 做沙箱 SELECT（不在应用侧预检索）。Gecis 的 `agy` 使用独立 `USERPROFILE`（对话、登录、探测共用），不会加载用户全局 MCP（例如 serena）。本地回环（界面 `*.localhost`、MCP、登录回调）不走系统代理。
 - 本地 SQLite 会话历史（项目 / 会话 / 消息）
 - 系统 `agy` headless NDJSON 流式回答
 
@@ -79,5 +79,5 @@ npm run e2e:runtime
 ## 与 Android 的关系
 
 - 前端交互与 `GecisNative` 契约对齐
-- fenbi 检索策略对齐（`fenbi_paper_questions` 优先）
+- fenbi MCP 工具对齐（`fenbi_schema` / `fenbi_get` / `fenbi_query`）
 - 不打包引擎，不自写 OAuth；认证交官方 keyring

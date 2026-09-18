@@ -1,5 +1,6 @@
 mod commands;
 mod fenbi_mcp;
+mod fenbi_sql;
 mod history;
 mod knowledge;
 mod runtime;
@@ -34,6 +35,15 @@ pub struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    {
+        // WebView2 follows the system proxy. Clients like v2rayN then intercept
+        // tauri.localhost / ipc.localhost and the window shows ERR_CONNECTION_REFUSED.
+        std::env::set_var(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "--proxy-bypass-list=<-loopback>;localhost;127.0.0.1;*.localhost",
+        );
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())

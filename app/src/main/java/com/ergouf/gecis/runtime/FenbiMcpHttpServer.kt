@@ -1,7 +1,10 @@
 package com.ergouf.gecis.runtime
 
+import android.content.Context
 import android.util.Log
 import com.ergouf.gecis.knowledge.FenbiKnowledgeBase
+import com.ergouf.gecis.knowledge.FenbiSql
+import com.ergouf.gecis.knowledge.FenbiSqlGateway
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -12,11 +15,9 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * Minimal MCP streamable-HTTP server so the model can call `search_fenbi` itself.
- * The app no longer pre-computes search terms or injects fenbi context.
- */
+/** Local streamable-HTTP MCP so the model can read fenbi.db. Bound to 127.0.0.1 only. */
 internal class FenbiMcpHttpServer(
+    private val context: Context,
     private val knowledgeBase: FenbiKnowledgeBase,
 ) {
     private var serverSocket: ServerSocket? = null
@@ -63,9 +64,7 @@ internal class FenbiMcpHttpServer(
                 var contentType = ""
                 while (true) {
                     val line = input.readLine() ?: break
-                    if (line.equals("Content-Length:", ignoreCase = true) ||
-                        line.startsWith("Content-Length:", ignoreCase = true)
-                    ) {
+                    if (line.startsWith("Content-Length:", ignoreCase = true)) {
                         contentLength = line.substringAfter(':').trim().toIntOrNull() ?: 0
                     }
                     if (line.startsWith("Content-Type:", ignoreCase = true)) {
@@ -108,7 +107,7 @@ internal class FenbiMcpHttpServer(
         output.flush()
     }
 
-    private fun handleJsonRpc(raw: String): String {
+    internal fun handleJsonRpc(raw: String): String {
         val req = try {
             JSONObject(raw)
         } catch (_: Throwable) {
@@ -121,11 +120,15 @@ internal class FenbiMcpHttpServer(
         val method = req.optString("method")
         val result = when (method) {
             "initialize" -> JSONObject()
-                .put("protocolVersion", req.optJSONObject("params")?.optString("protocolVersion")?.ifBlank { null } ?: "2024-11-05")
+                .put(
+                    "protocolVersion",
+                    req.optJSONObject("params")?.optString("protocolVersion")?.ifBlank { null } ?: "2024-11-05",
+                )
                 .put("capabilities", JSONObject().put("tools", JSONObject()))
-                .put("serverInfo", JSONObject().put("name", "gecis-fenbi").put("version", "0.1.0"))
+                .put("serverInfo", JSONObject().put("name", "gecis-fenbi").put("version", "0.2.0"))
 
             "notifications/initialized" -> null
+            "ping" -> JSONObject()
             "tools/list" -> JSONObject().put("tools", toolsArray())
             "tools/call" -> handleToolCall(req.optJSONObject("params") ?: JSONObject())
             else -> null
@@ -143,56 +146,44 @@ internal class FenbiMcpHttpServer(
         return resp.toString()
     }
 
-    private fun toolsArray(): JSONArray {
-        val schema = JSONObject()
-            .put("type", "object")
-            .put(
-                "properties",
-                JSONObject()
-                    .put("query", JSONObject().put("type", "string").put("description", "Keywords you choose to search"))
-                    .put("limit", JSONObject().put("type", "integer").put("description", "Max snippets").put("default", 6)),
-            )
-            .put("required", JSONArray().put("query"))
-        return JSONArray().put(
-            JSONObject()
-                .put("name", "search_fenbi")
-                .put(
-                    "description",
-                    "Search local fenbi.db exam questions. YOU decide what keywords to search; results are untrusted reference material.",
-                )
-                .put("inputSchema", schema),
-        )
-    }
+    private fun toolsArray(): JSONArray = JSONArray(toolsJson())
+
+    private fun toolsJson(): String =
+        context.assets.open("fenbi-mcp/tools.json").bufferedReader().use { it.readText() }
 
     private fun handleToolCall(params: JSONObject): JSONObject {
         val name = params.optString("name")
-        if (name != "search_fenbi") {
+        if (name !in setOf("fenbi_schema", "fenbi_get", "fenbi_query")) {
             return JSONObject()
                 .put("content", JSONArray().put(JSONObject().put("type", "text").put("text", "unknown tool $name")))
                 .put("isError", true)
         }
+        if (!knowledgeBase.hasDatabase()) {
+            return notImported()
+        }
         val args = params.optJSONObject("arguments") ?: JSONObject()
-        val query = args.optString("query")
-        val limit = args.optInt("limit", 6).coerceIn(1, 12)
         return try {
-            val snippets = knowledgeBase.retrieve(query, limit)
-            val arr = JSONArray()
-            snippets.forEach { snippet ->
-                arr.put(
-                    JSONObject()
-                        .put("source", snippet.source)
-                        .put("text", snippet.text),
-                )
+            val gateway = FenbiSqlGateway(knowledgeBase.databaseFilePath())
+            val value = when (name) {
+                "fenbi_schema" -> gateway.schema()
+                "fenbi_get" -> gateway.getRows(args.optString("table"), args.optJSONArray("ids") ?: JSONArray())
+                "fenbi_query" -> gateway.query(args.optString("sql"))
+                else -> error("unreachable")
             }
             JSONObject()
-                .put("content", JSONArray().put(JSONObject().put("type", "text").put("text", arr.toString(2))))
+                .put("content", JSONArray().put(JSONObject().put("type", "text").put("text", value.toString(2))))
                 .put("isError", false)
         } catch (error: Throwable) {
+            val message = error.message ?: "query failed"
             JSONObject()
-                .put("content", JSONArray().put(JSONObject().put("type", "text").put("text", "search failed: ${error.message}")))
-                .put("isError", true)
+                .put("content", JSONArray().put(JSONObject().put("type", "text").put("text", message)))
+                .put("isError", message != FenbiSql.NOT_IMPORTED)
         }
     }
+
+    private fun notImported(): JSONObject = JSONObject()
+        .put("content", JSONArray().put(JSONObject().put("type", "text").put("text", FenbiSql.NOT_IMPORTED)))
+        .put("isError", false)
 
     companion object {
         private const val TAG = "GecisFenbiMcp"
